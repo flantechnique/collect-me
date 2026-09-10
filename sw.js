@@ -23,6 +23,7 @@ const SHELL_FILES = [
   "./assets/library-bg.jpg",
   "./assets/icon-192.png",
   "./assets/icon-512.png",
+  "./assets/logo-mark.png",
 ];
 
 self.addEventListener("install", (event) => {
