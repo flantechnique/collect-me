@@ -80,7 +80,6 @@ const el = {
   recommendationsContent: document.getElementById("recommendations-content"),
   compareInput: document.getElementById("compare-input"),
   compareBtn: document.getElementById("compare-btn"),
-  compareSummary: document.getElementById("compare-summary"),
   compareResult: document.getElementById("compare-result"),
   digestContent: document.getElementById("digest-content"),
   wantlistAlertsContent: document.getElementById("wantlist-alerts-content"),
@@ -100,8 +99,6 @@ const el = {
   showcaseContent: document.getElementById("showcase-content"),
   showcaseForsaleSection: document.getElementById("showcase-forsale-section"),
   showcaseForsaleContent: document.getElementById("showcase-forsale-content"),
-  showcaseActivitySection: document.getElementById("showcase-activity-section"),
-  showcaseActivityContent: document.getElementById("showcase-activity-content"),
   collectionPrintLabelsBtn: document.getElementById("collection-print-labels-btn"),
   collectionBulkBar: document.getElementById("collection-bulk-bar"),
   collectionBulkCount: document.getElementById("collection-bulk-count"),
@@ -136,15 +133,6 @@ const el = {
   accountPasswordInput: document.getElementById("account-password-input"),
   accountPasswordConfirmInput: document.getElementById("account-password-confirm-input"),
   accountPasswordStatus: document.getElementById("account-password-status"),
-  accountCurrentEmail: document.getElementById("account-current-email"),
-  accountEmailForm: document.getElementById("account-email-form"),
-  accountEmailInput: document.getElementById("account-email-input"),
-  accountEmailStatus: document.getElementById("account-email-status"),
-  accountExportBeforeDeleteBtn: document.getElementById("account-export-before-delete-btn"),
-  accountDeleteForm: document.getElementById("account-delete-form"),
-  accountDeleteConfirmInput: document.getElementById("account-delete-confirm-input"),
-  accountDeleteSubmitBtn: document.getElementById("account-delete-submit-btn"),
-  accountDeleteStatus: document.getElementById("account-delete-status"),
   authModal: document.getElementById("auth-modal"),
   authModalClose: document.getElementById("auth-modal-close"),
   authModalTitle: document.getElementById("auth-modal-title"),
@@ -1785,7 +1773,6 @@ async function loadFunView() {
   el.rouletteResult.innerHTML = "";
   el.quizQuestion.innerHTML = "";
   el.compareResult.innerHTML = "";
-  el.compareSummary.innerHTML = "";
 }
 
 el.funAccountLink.addEventListener("click", () => openAccountView());
@@ -1976,7 +1963,6 @@ async function compareWithFriend() {
   }
 
   el.compareResult.innerHTML = "<p class='empty'>Comparaison en cours...</p>";
-  el.compareSummary.innerHTML = "";
 
   const { data: profile } = await sb
     .from("profiles")
@@ -1996,45 +1982,9 @@ async function compareWithFriend() {
   }
 
   const entries = collectionEntriesCache.length ? collectionEntriesCache : await fetchCollectionEntries();
-  const myOwned = entries.filter((e) => e.status === "owned");
-  const ownedIds = new Set(myOwned.map((e) => e.item_id));
+  const ownedIds = new Set(entries.filter((e) => e.status === "owned").map((e) => e.item_id));
   const uniqueFriendItems = [...new Map((friendItems ?? []).map((i) => [i.item_id, i])).values()];
   const common = uniqueFriendItems.filter((i) => ownedIds.has(i.item_id));
-
-  // ---- duel : tailles de collection + répartition par catégorie, qui en a le plus ----
-  const myByCategory = new Map();
-  myOwned.forEach((e) => {
-    const name = e.items.categories.name;
-    myByCategory.set(name, (myByCategory.get(name) ?? 0) + 1);
-  });
-  const friendByCategory = new Map();
-  uniqueFriendItems.forEach((i) => {
-    friendByCategory.set(i.category_name, (friendByCategory.get(i.category_name) ?? 0) + 1);
-  });
-  const allCategoryNames = [...new Set([...myByCategory.keys(), ...friendByCategory.keys()])].sort();
-
-  const summary = document.createElement("div");
-  summary.className = "duel-summary";
-  const myTotal = myOwned.length;
-  const friendTotal = uniqueFriendItems.length;
-  const totalWinner = myTotal === friendTotal ? "égalité" : myTotal > friendTotal ? "toi" : escapeHtml(friendName);
-  summary.innerHTML = `
-    <p class="duel-total">🏆 ${myTotal} vs ${friendTotal} items possédés — ${
-      totalWinner === "égalité" ? "égalité parfaite !" : `avantage ${totalWinner === "toi" ? "à toi" : `à ${totalWinner}`} !`
-    }</p>
-    <table class="duel-table">
-      <thead><tr><th>Catégorie</th><th>Toi</th><th></th><th>${escapeHtml(friendName)}</th></tr></thead>
-      <tbody>
-        ${allCategoryNames.map((name) => {
-          const mine = myByCategory.get(name) ?? 0;
-          const theirs = friendByCategory.get(name) ?? 0;
-          const badge = mine === theirs ? "🤝" : mine > theirs ? "◀️" : "▶️";
-          return `<tr><td>${escapeHtml(name)}</td><td>${mine}</td><td>${badge}</td><td>${theirs}</td></tr>`;
-        }).join("")}
-      </tbody>
-    </table>
-  `;
-  el.compareSummary.appendChild(summary);
 
   if (!common.length) {
     el.compareResult.innerHTML = `<p class='empty'>Aucun item en commun avec ${escapeHtml(friendName)} pour l'instant.</p>`;
@@ -2158,13 +2108,6 @@ async function openAccountView() {
   setAccountImagePreview(el.accountBannerImg, profile?.banner_url);
 
   renderAccountAuthMethods();
-
-  el.accountCurrentEmail.textContent = currentUser.email || "(aucun)";
-  el.accountEmailInput.value = "";
-  el.accountEmailStatus.hidden = true;
-  el.accountDeleteConfirmInput.value = "";
-  el.accountDeleteSubmitBtn.disabled = true;
-  el.accountDeleteStatus.hidden = true;
 }
 
 function setAccountImagePreview(imgEl, url) {
@@ -2346,90 +2289,6 @@ el.accountPasswordForm.addEventListener("submit", async (e) => {
   el.accountPasswordStatus.hidden = false;
 });
 
-// ---- changer d'email : envoie une (ou deux, selon les réglages Supabase) confirmation(s)
-// par email avant que le changement ne prenne effet ----
-el.accountEmailForm.addEventListener("submit", async (e) => {
-  e.preventDefault();
-  el.accountEmailStatus.hidden = true;
-  const newEmail = el.accountEmailInput.value.trim();
-  const { error } = await sb.auth.updateUser({ email: newEmail });
-  if (error) {
-    el.accountEmailStatus.textContent = error.message;
-    el.accountEmailStatus.hidden = false;
-    return;
-  }
-  el.accountEmailStatus.textContent = "Vérifie ta boîte mail : un lien de confirmation a été envoyé (à la nouvelle adresse, et parfois aussi à l'ancienne selon les réglages).";
-  el.accountEmailStatus.hidden = false;
-});
-
-// ---- suppression du compte : export préalable optionnel, puis appel à la edge function
-// "delete-account" (seule capable de supprimer le compte auth.users lui-même, la clé anonyme
-// ne le permettant pas) ----
-el.accountExportBeforeDeleteBtn.addEventListener("click", async () => {
-  const { data: entries } = await sb
-    .from("collection_entries")
-    .select("*, items(*, categories(*))")
-    .eq("user_id", currentUser.id);
-  const { data: profile } = await sb
-    .from("profiles")
-    .select("*")
-    .eq("id", currentUser.id)
-    .maybeSingle();
-  const data = {
-    compte: { email: currentUser.email, id: currentUser.id },
-    profil: profile ?? null,
-    collection: (entries ?? []).map((e) => ({
-      titre: e.items.title,
-      categorie: e.items.categories.name,
-      statut: e.status,
-      etat: e.condition,
-      prix_paye: e.price_paid,
-      prix_demande: e.asking_price,
-      date_acquisition: e.acquired_at,
-      notes: e.notes,
-      attributs: e.items.attributes,
-    })),
-  };
-  triggerDownload(JSON.stringify(data, null, 2), "mes-donnees-collect-me.json", "application/json;charset=utf-8;");
-});
-
-el.accountDeleteConfirmInput.addEventListener("input", () => {
-  el.accountDeleteSubmitBtn.disabled = el.accountDeleteConfirmInput.value.trim() !== "SUPPRIMER";
-});
-
-el.accountDeleteForm.addEventListener("submit", async (e) => {
-  e.preventDefault();
-  if (el.accountDeleteConfirmInput.value.trim() !== "SUPPRIMER") return;
-  if (!confirm("Dernière confirmation : supprimer définitivement ton compte et toutes tes données ?")) return;
-
-  el.accountDeleteSubmitBtn.disabled = true;
-  el.accountDeleteStatus.hidden = true;
-
-  const { data: { session } } = await sb.auth.getSession();
-  if (!session) return;
-
-  try {
-    const res = await fetch(`${SUPABASE_URL}/functions/v1/delete-account`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${session.access_token}` },
-    });
-    const body = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      el.accountDeleteStatus.textContent = body.error || "Une erreur est survenue, réessaie plus tard.";
-      el.accountDeleteStatus.hidden = false;
-      el.accountDeleteSubmitBtn.disabled = false;
-      return;
-    }
-    alert("Ton compte a bien été supprimé.");
-    await sb.auth.signOut();
-    location.href = location.origin + location.pathname;
-  } catch (_e) {
-    el.accountDeleteStatus.textContent = "Impossible de contacter le serveur, réessaie plus tard.";
-    el.accountDeleteStatus.hidden = false;
-    el.accountDeleteSubmitBtn.disabled = false;
-  }
-});
-
 // ---- rendu de la vitrine publique pour un visiteur (pas besoin d'être connecté) ----
 // accepte soit un user_id (lien historique ?showcase=), soit un pseudo (nouveau lien ?u=)
 async function renderPublicShowcase({ userId, username }) {
@@ -2501,28 +2360,6 @@ async function renderPublicShowcase({ userId, username }) {
     el.showcaseForsaleContent.appendChild(forSaleGrid);
   } else {
     el.showcaseForsaleSection.hidden = true;
-  }
-
-  // fil d'activité : les derniers ajouts, façon Letterboxd — chaque exemplaire ajouté compte
-  // comme un événement, y compris un doublon d'un item déjà présent
-  if (items?.length) {
-    const recent = [...items].sort((a, b) => new Date(b.created_at) - new Date(a.created_at)).slice(0, 8);
-    el.showcaseActivitySection.hidden = false;
-    el.showcaseActivityContent.innerHTML = "";
-    recent.forEach((item) => {
-      const row = document.createElement("div");
-      row.className = "activity-row";
-      row.innerHTML = `
-        <img src="${item.cover_image_url ?? ""}" alt="" onerror="this.style.visibility='hidden'" />
-        <div class="activity-info">
-          <span class="activity-title">${item.category_icon ?? ""} ${escapeHtml(item.title)}</span>
-          <span class="activity-date">Ajouté le ${new Date(item.created_at).toLocaleDateString("fr-FR")}</span>
-        </div>
-      `;
-      el.showcaseActivityContent.appendChild(row);
-    });
-  } else {
-    el.showcaseActivitySection.hidden = true;
   }
 
   if (error || !items?.length) {

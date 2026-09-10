@@ -1114,35 +1114,6 @@ form#add-item-form button[type="submit"]:hover { background: var(--accent-hover)
   font-size: 0.72rem;
 }
 
-.activity-feed { display: flex; flex-direction: column; gap: 0.6rem; }
-
-.activity-row {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-}
-
-.activity-row img {
-  width: 40px;
-  height: 40px;
-  object-fit: cover;
-  border-radius: 8px;
-  background: var(--bg-soft);
-  flex-shrink: 0;
-}
-
-.activity-row .activity-info { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
-
-.activity-row .activity-title {
-  font-weight: 700;
-  font-size: 0.85rem;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.activity-row .activity-date { font-size: 0.75rem; color: var(--muted); }
-
 .pokedex-badge {
   position: absolute;
   top: 0.5rem;
@@ -1486,18 +1457,14 @@ form#add-item-form button[type="submit"]:hover { background: var(--accent-hover)
 .account-upload-label:hover { color: var(--accent-hover); }
 
 #account-profile-form,
-#account-password-form,
-#account-email-form,
-#account-delete-form {
+#account-password-form {
   display: flex;
   flex-wrap: wrap;
   gap: 0.9rem;
 }
 
 #account-profile-form label,
-#account-password-form label,
-#account-email-form label,
-#account-delete-form label {
+#account-password-form label {
   display: flex;
   flex-direction: column;
   gap: 0.3rem;
@@ -1508,14 +1475,11 @@ form#add-item-form button[type="submit"]:hover { background: var(--accent-hover)
   min-width: 200px;
 }
 
-#account-profile-form label.full-width,
-#account-delete-form label.full-width { flex-basis: 100%; }
+#account-profile-form label.full-width { flex-basis: 100%; }
 
 #account-profile-form input,
 #account-profile-form textarea,
-#account-password-form input,
-#account-email-form input,
-#account-delete-form input {
+#account-password-form input {
   border-radius: 8px;
   border: 1px solid var(--border);
   background: var(--card);
@@ -1527,29 +1491,7 @@ form#add-item-form button[type="submit"]:hover { background: var(--accent-hover)
 
 #account-profile-form textarea { min-height: 70px; resize: vertical; }
 #account-profile-form .actions,
-#account-password-form .actions,
-#account-email-form .actions,
-#account-delete-form .actions { flex-basis: 100%; }
-
-.account-danger-zone {
-  border-color: var(--accent);
-}
-
-.account-danger-zone h3 { color: var(--accent); }
-
-#account-export-before-delete-btn {
-  margin-bottom: 0.9rem;
-}
-
-.danger-btn {
-  background: var(--accent) !important;
-}
-
-.danger-btn:disabled {
-  background: var(--muted) !important;
-  cursor: not-allowed;
-  opacity: 0.6;
-}
+#account-password-form .actions { flex-basis: 100%; }
 
 .account-username-status {
   font-size: 0.78rem;
@@ -1651,33 +1593,6 @@ form#add-item-form button[type="submit"]:hover { background: var(--accent-hover)
   margin: 0.6rem 0 0.9rem;
   flex-wrap: wrap;
 }
-
-.duel-summary { margin-bottom: 0.9rem; }
-
-.duel-total { font-weight: 700; margin: 0 0 0.7rem; }
-
-.duel-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 0.85rem;
-}
-
-.duel-table th {
-  text-align: left;
-  color: var(--muted);
-  font-weight: 700;
-  padding: 0.35rem 0.5rem;
-  border-bottom: 1px solid var(--border);
-}
-
-.duel-table th:not(:first-child), .duel-table td:not(:first-child) { text-align: center; }
-
-.duel-table td {
-  padding: 0.35rem 0.5rem;
-  border-bottom: 1px solid var(--border);
-}
-
-.duel-table tr:last-child td { border-bottom: none; }
 
 #compare-input {
   flex: 1;
