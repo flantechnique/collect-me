@@ -35,29 +35,49 @@ const el = {
   itemBubble: document.getElementById("item-bubble"),
   itemBubbleContent: document.getElementById("item-bubble-content"),
   itemBubbleClose: document.getElementById("item-bubble-close"),
+  brandLogo: document.getElementById("brand-logo"),
+  creatorView: document.getElementById("creator-view"),
+  creatorTitle: document.getElementById("creator-title"),
+  creatorList: document.getElementById("creator-list"),
+  creatorBack: document.getElementById("creator-back"),
 };
 
 let currentDetail = null;
+
+// Catégories dont la recherche externe repose sur Discogs (même edge function, même
+// forme de réponse) : vinyles et CD partagent le même catalogue de référence musical.
+const DISCOGS_CATEGORIES = ["vinyl", "cd"];
+
+// Catégories dont la recherche externe repose sur TMDB (même edge function) : DVD/steelbooks
+// et affiches de films sont tous deux des objets liés à un film du catalogue TMDB.
+const TMDB_CATEGORIES = ["dvd", "movie_poster"];
 
 // Catégories pour lesquelles une edge function de recherche externe existe.
 // Ajouter une entrée ici active automatiquement le bloc de recherche pour la catégorie.
 const CATEGORY_SEARCH_FUNCTIONS = {
   vinyl: "discogs-search",
+  cd: "discogs-search",
   video_game: "rawg-search",
+  book: "openlibrary-search",
+  dvd: "tmdb-search",
+  movie_poster: "tmdb-search",
 };
 
 // Pour chaque catégorie avec recherche externe : comment transformer un résultat
 // brut de l'API (voir la edge function correspondante) en { externalIds, attributes }
 // compatibles avec le attribute_schema de la catégorie.
+const discogsResultMapper = (r) => ({
+  externalIds: { discogs_id: r.discogs_id },
+  attributes: {
+    ...(r.label && { label: r.label }),
+    ...(r.year && { pressing_year: r.year }),
+    ...(r.format && { format: r.format }),
+  },
+});
+
 const CATEGORY_RESULT_MAPPERS = {
-  vinyl: (r) => ({
-    externalIds: { discogs_id: r.discogs_id },
-    attributes: {
-      ...(r.label && { label: r.label }),
-      ...(r.year && { pressing_year: r.year }),
-      ...(r.format && { format: r.format }),
-    },
-  }),
+  vinyl: discogsResultMapper,
+  cd: discogsResultMapper,
   video_game: (r) => ({
     externalIds: { rawg_id: r.rawg_id },
     attributes: {
@@ -66,7 +86,65 @@ const CATEGORY_RESULT_MAPPERS = {
       ...(r.year && { release_year: r.year }),
     },
   }),
+  book: (r) => ({
+    externalIds: { olid: r.olid },
+    attributes: {
+      ...(r.author && { author: r.author }),
+      ...(r.publisher && { publisher: r.publisher }),
+      ...(r.year && { year: r.year }),
+    },
+  }),
+  dvd: (r) => ({
+    externalIds: { tmdb_id: r.tmdb_id },
+    attributes: {
+      ...(r.year && { release_year: r.year }),
+    },
+  }),
+  movie_poster: (r) => ({
+    externalIds: { tmdb_id: r.tmdb_id },
+    attributes: {
+      ...(r.year && { release_year: r.year }),
+    },
+  }),
 };
+
+// Pour chaque catégorie, l'attribut qui représente son "créateur" (artiste, studio,
+// auteur, réalisateur...) : affiché comme un lien cliquable menant à l'ensemble de ses œuvres.
+const CREATOR_FIELD_BY_CATEGORY = {
+  vinyl: "artist",
+  cd: "artist",
+  video_game: "publisher",
+  book: "author",
+  dvd: "director",
+  movie_poster: "director",
+};
+
+// Clé dans external_ids qui identifie un item pour chaque catégorie avec recherche externe.
+const EXTERNAL_ID_KEY = {
+  vinyl: "discogs_id",
+  cd: "discogs_id",
+  video_game: "rawg_id",
+  book: "olid",
+  dvd: "tmdb_id",
+  movie_poster: "tmdb_id",
+};
+
+// Clé dans external_ids qui identifie le "créateur" d'un item, quand on la connaît
+// précisément (sinon on retombe sur une recherche approximative par nom).
+const CREATOR_ID_KEY = {
+  vinyl: "discogs_artist_id",
+  cd: "discogs_artist_id",
+  book: "ol_author_id",
+  dvd: "tmdb_director_id",
+  movie_poster: "tmdb_director_id",
+};
+
+function creatorIcon(cat) {
+  if (cat.slug === "book") return "✍️";
+  if (cat.slug === "video_game") return "🏢";
+  if (TMDB_CATEGORIES.includes(cat.slug)) return "🎬";
+  return "🎤";
+}
 
 // ---------- auth ----------
 async function initAuth() {
@@ -194,11 +272,22 @@ function renderItemCard(item, cat) {
   attrs.className = "attrs";
   (cat.attribute_schema || []).forEach((field) => {
     const val = item.attributes?.[field.key];
-    if (val) {
-      const li = document.createElement("li");
+    if (!val) return;
+    const li = document.createElement("li");
+    if (field.key === CREATOR_FIELD_BY_CATEGORY[cat.slug]) {
+      li.append(`${field.label} : `);
+      const span = document.createElement("span");
+      span.className = "creator-link";
+      span.textContent = val;
+      span.onclick = (e) => {
+        e.stopPropagation();
+        openCreatorWorks({ cat, name: val, artistId: item.external_ids?.[CREATOR_ID_KEY[cat.slug]] || null });
+      };
+      li.appendChild(span);
+    } else {
       li.textContent = `${field.label} : ${val}`;
-      attrs.appendChild(li);
     }
+    attrs.appendChild(li);
   });
   card.appendChild(attrs);
 
@@ -388,13 +477,19 @@ function statusLabel(status) {
 el.collectionFilter.addEventListener("change", loadMyCollection);
 
 // ---------- view switching ----------
-el.viewHomeBtn.addEventListener("click", () => {
+function goHome() {
   unsubscribeCommunityFeed();
   switchView("home");
-});
-el.backToHomeBtn.addEventListener("click", () => {
-  unsubscribeCommunityFeed();
-  switchView("home");
+}
+
+el.viewHomeBtn.addEventListener("click", goHome);
+el.backToHomeBtn.addEventListener("click", goHome);
+el.brandLogo.addEventListener("click", goHome);
+el.brandLogo.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" || e.key === " ") {
+    e.preventDefault();
+    goHome();
+  }
 });
 el.viewCollectionBtn.addEventListener("click", () => {
   unsubscribeCommunityFeed();
@@ -402,12 +497,14 @@ el.viewCollectionBtn.addEventListener("click", () => {
 });
 
 el.detailBack.addEventListener("click", () => switchView("catalogue"));
+el.creatorBack.addEventListener("click", () => switchView("catalogue"));
 
 function switchView(view) {
   el.homeView.hidden = view !== "home";
   el.catalogueView.hidden = view !== "catalogue";
   el.collectionView.hidden = view !== "collection";
   el.detailView.hidden = view !== "detail";
+  el.creatorView.hidden = view !== "creator";
   el.viewHomeBtn.classList.toggle("active", view === "home");
   el.viewCollectionBtn.classList.toggle("active", view === "collection");
   if (view === "collection") loadMyCollection();
@@ -584,9 +681,7 @@ function attachReferenceBubble(node, ref, externalId, cat) {
       image: ref.cover_image_url,
       meta: `${ref.count}× consulté`,
       onOpen: () => {
-        const r = cat.slug === "vinyl"
-          ? { discogs_id: externalId, title: ref.title, cover_image: ref.cover_image_url }
-          : { rawg_id: externalId, title: ref.title, cover_image: ref.cover_image_url };
+        const r = { [EXTERNAL_ID_KEY[cat.slug]]: externalId, title: ref.title, cover_image: ref.cover_image_url };
         openDetail(r, cat);
       },
     });
@@ -598,11 +693,9 @@ function attachReferenceBubble(node, ref, externalId, cat) {
 // via la edge function ; sinon on affiche la fiche à partir des seules données locales.
 async function openItemDetail(item, cat) {
   const fnName = CATEGORY_SEARCH_FUNCTIONS[cat.slug];
-  const extId = cat.slug === "vinyl" ? item.external_ids?.discogs_id : item.external_ids?.rawg_id;
+  const extId = item.external_ids?.[EXTERNAL_ID_KEY[cat.slug]];
   if (fnName && extId) {
-    const r = cat.slug === "vinyl"
-      ? { discogs_id: extId, title: item.title, cover_image: item.cover_image_url }
-      : { rawg_id: extId, title: item.title, cover_image: item.cover_image_url };
+    const r = { [EXTERNAL_ID_KEY[cat.slug]]: extId, title: item.title, cover_image: item.cover_image_url };
     return openDetail(r, cat);
   }
   renderLocalItemDetail(item, cat);
@@ -612,6 +705,7 @@ function renderLocalItemDetail(item, cat) {
   currentDetail = null;
   switchView("detail");
 
+  const creatorKey = CREATOR_FIELD_BY_CATEGORY[cat.slug];
   let html = `
     <div class="detail-header">
       <img class="detail-cover" src="${item.cover_image_url ?? ""}" alt="" onerror="this.style.visibility='hidden'" />
@@ -623,12 +717,18 @@ function renderLocalItemDetail(item, cat) {
       ${(cat.attribute_schema || [])
         .map((field) => {
           const val = item.attributes?.[field.key];
-          return val ? `<li>${escapeHtml(field.label)} : ${escapeHtml(String(val))}</li>` : "";
+          if (!val) return "";
+          if (field.key === creatorKey) {
+            const artistId = item.external_ids?.[CREATOR_ID_KEY[cat.slug]] ?? "";
+            return `<li>${escapeHtml(field.label)} : <span class="creator-link" data-artist-id="${escapeHtml(String(artistId))}">${escapeHtml(String(val))}</span></li>`;
+          }
+          return `<li>${escapeHtml(field.label)} : ${escapeHtml(String(val))}</li>`;
         })
         .join("")}
     </ul>
   `;
   el.detailContent.innerHTML = html;
+  wireCreatorLinks(cat);
 
   if (currentUser) {
     const actions = document.createElement("div");
@@ -642,6 +742,100 @@ function renderLocalItemDetail(item, cat) {
     actions.append(ownedBtn, wantedBtn);
     el.detailContent.appendChild(actions);
   }
+}
+
+// ---------- œuvres d'un artiste / studio ----------
+function wireCreatorLinks(cat) {
+  el.detailContent.querySelectorAll(".creator-link").forEach((node) => {
+    node.onclick = (e) => {
+      e.stopPropagation();
+      openCreatorWorks({ cat, name: node.textContent.trim(), artistId: node.dataset.artistId || null });
+    };
+  });
+}
+
+async function openCreatorWorks({ cat, name, artistId }) {
+  if (!name) return;
+  const fnName = CATEGORY_SEARCH_FUNCTIONS[cat.slug];
+  if (!fnName) return;
+
+  switchView("creator");
+  el.creatorTitle.textContent = `${creatorIcon(cat)} ${name}`;
+  el.creatorList.innerHTML = "<p class='empty'>Recherche des œuvres...</p>";
+
+  const { data: { session } } = await sb.auth.getSession();
+  if (!session) {
+    el.creatorList.innerHTML = "<p class='empty'>Connecte-toi pour explorer le catalogue externe.</p>";
+    return;
+  }
+
+  const params = new URLSearchParams({ category_id: cat.id });
+  if (DISCOGS_CATEGORIES.includes(cat.slug)) {
+    if (artistId) params.set("artist_id", artistId);
+    else params.set("artist", name);
+  } else if (cat.slug === "video_game") {
+    params.set("publisher", name);
+  } else if (cat.slug === "book") {
+    if (artistId) params.set("author_id", artistId);
+    else params.set("author", name);
+  } else if (TMDB_CATEGORIES.includes(cat.slug)) {
+    if (artistId) params.set("person_id", artistId);
+    else params.set("person", name);
+  }
+
+  const res = await fetch(`${SUPABASE_URL}/functions/v1/${fnName}?${params}`, {
+    headers: { Authorization: `Bearer ${session.access_token}` },
+  });
+  const payload = await res.json();
+  if (!res.ok) {
+    el.creatorList.innerHTML = `<p class='empty'>Erreur : ${payload.error ?? res.statusText}</p>`;
+    return;
+  }
+  renderCreatorResults(payload.results ?? [], cat);
+}
+
+function renderCreatorResults(results, cat) {
+  el.creatorList.innerHTML = "";
+  if (!results.length) {
+    el.creatorList.innerHTML = "<p class='empty'>Aucune autre œuvre trouvée.</p>";
+    return;
+  }
+  const mapper = CATEGORY_RESULT_MAPPERS[cat.slug];
+  results.forEach((r) => {
+    const { attributes } = mapper(r);
+    const meta = (cat.attribute_schema || [])
+      .map((field) => attributes[field.key])
+      .filter(Boolean)
+      .join(" · ");
+
+    const row = document.createElement("div");
+    row.className = "search-result-row";
+
+    const img = document.createElement("img");
+    img.src = r.cover_image ?? "";
+    img.alt = "";
+    img.onerror = () => { img.style.visibility = "hidden"; };
+    row.appendChild(img);
+
+    const info = document.createElement("div");
+    info.className = "info";
+    info.innerHTML = `
+      <span class="r-title">${escapeHtml(r.title)}</span>
+      <span class="r-meta">${escapeHtml(meta)}</span>
+    `;
+    row.appendChild(info);
+
+    row.addEventListener("click", (e) => {
+      e.stopPropagation();
+      showItemBubble(row, {
+        title: r.title,
+        image: r.cover_image,
+        meta,
+        onOpen: () => openDetail(r, cat),
+      });
+    });
+    el.creatorList.appendChild(row);
+  });
 }
 
 // ---------- dédoublonnage du catalogue ----------
@@ -695,7 +889,7 @@ async function openDetail(r, cat) {
   el.detailContent.innerHTML = "<p class='empty'>Chargement...</p>";
 
   const fnName = CATEGORY_SEARCH_FUNCTIONS[cat.slug];
-  const id = cat.slug === "vinyl" ? r.discogs_id : r.rawg_id;
+  const id = r[EXTERNAL_ID_KEY[cat.slug]];
 
   const { data: { session } } = await sb.auth.getSession();
   const res = await fetch(
@@ -726,12 +920,15 @@ function renderDetail() {
   const displayTitle = activeVersion?.title ?? detail.title;
   const displayImage = activeVersion?.thumb ?? detail.cover_image;
 
+  const creatorName = detail.artist ?? detail.author ?? detail.director ?? null;
+  const creatorId = detail.artist_id ?? detail.author_id ?? detail.director_id ?? "";
+
   let html = `
     <div class="detail-header">
       <img class="detail-cover" src="${displayImage ?? ""}" alt="" onerror="this.style.visibility='hidden'" />
       <div>
         <h2>${escapeHtml(displayTitle)}</h2>
-        ${detail.artist ? `<p class="muted">${escapeHtml(detail.artist)}</p>` : ""}
+        ${creatorName ? `<p class="muted"><span class="creator-link" data-artist-id="${escapeHtml(String(creatorId))}">${escapeHtml(creatorName)}</span></p>` : ""}
       </div>
     </div>
   `;
@@ -742,25 +939,74 @@ function renderDetail() {
     html += `<p class="detail-description">${escapeHtml(truncated)}</p>`;
   }
 
+  const isDiscogs = DISCOGS_CATEGORIES.includes(cat.slug);
+
   html += `<ul class="attrs">`;
-  if (cat.slug === "vinyl") {
+  if (isDiscogs) {
     if (detail.label) html += `<li>Label : ${escapeHtml(detail.label)}</li>`;
     const format = activeVersion?.format ?? detail.format;
     if (format) html += `<li>Format : ${escapeHtml(format)}</li>`;
     const year = activeVersion?.year ?? detail.pressing_year;
     if (year) html += `<li>Année : ${escapeHtml(String(year))}</li>`;
     if (activeVersion?.country) html += `<li>Pays : ${escapeHtml(activeVersion.country)}</li>`;
-  } else {
+    if (detail.genre) html += `<li>Genre : ${escapeHtml(detail.genre)}</li>`;
+  } else if (cat.slug === "video_game") {
     if (selectedPlatform) html += `<li>Plateforme : ${escapeHtml(selectedPlatform)}</li>`;
     if (detail.genre) html += `<li>Genre : ${escapeHtml(detail.genre)}</li>`;
+    if (detail.publisher) html += `<li>Éditeur : <span class="creator-link">${escapeHtml(detail.publisher)}</span></li>`;
+    if (detail.release_year) html += `<li>Année de sortie : ${escapeHtml(String(detail.release_year))}</li>`;
+  } else if (cat.slug === "book") {
     if (detail.publisher) html += `<li>Éditeur : ${escapeHtml(detail.publisher)}</li>`;
+    if (detail.year) html += `<li>Année de publication : ${escapeHtml(String(detail.year))}</li>`;
+    if (detail.isbn) html += `<li>ISBN : ${escapeHtml(detail.isbn)}</li>`;
+  } else if (TMDB_CATEGORIES.includes(cat.slug)) {
+    if (detail.genre) html += `<li>Genre : ${escapeHtml(detail.genre)}</li>`;
     if (detail.release_year) html += `<li>Année de sortie : ${escapeHtml(String(detail.release_year))}</li>`;
   }
   html += `</ul>`;
 
-  el.detailContent.innerHTML = html;
+  if (isDiscogs && detail.tracklist?.length) {
+    html += `<h3 class="detail-subheading">Tracklist</h3><ol class="tracklist">`;
+    detail.tracklist.forEach((t) => {
+      html += `<li><span class="track-position">${escapeHtml(t.position ?? "")}</span> ${escapeHtml(t.title)}${t.duration ? `<span class="track-duration">${escapeHtml(t.duration)}</span>` : ""}</li>`;
+    });
+    html += `</ol>`;
+  }
 
-  if (cat.slug === "vinyl" && versions.length > 1) {
+  if (cat.slug === "book" && detail.subjects?.length) {
+    html += `<h3 class="detail-subheading">Sujets</h3><p class="detail-description">${escapeHtml(detail.subjects.join(" · "))}</p>`;
+  }
+
+  if (TMDB_CATEGORIES.includes(cat.slug) && detail.cast?.length) {
+    html += `<h3 class="detail-subheading">Casting</h3><ul class="cast-list">`;
+    detail.cast.forEach((c) => {
+      html += `<li><span class="creator-link" data-artist-id="${escapeHtml(String(c.id))}">${escapeHtml(c.name)}</span>${c.character ? ` <span class="cast-role">(${escapeHtml(c.character)})</span>` : ""}</li>`;
+    });
+    html += `</ul>`;
+  }
+
+  if (isDiscogs) {
+    const buyLinks = [{
+      label: `Voir sur le marketplace Discogs${detail.num_for_sale ? ` (${detail.num_for_sale} en vente${detail.lowest_price ? `, dès ${detail.lowest_price}` : ""})` : ""}`,
+      url: `https://www.discogs.com/sell/release/${detail.discogs_id}`,
+    }];
+    if (detail.artist) {
+      buyLinks.push({
+        label: "Rechercher sur Bandcamp",
+        url: `https://bandcamp.com/search?q=${encodeURIComponent(`${detail.artist} ${displayTitle}`)}`,
+      });
+    }
+    html += `<h3 class="detail-subheading">Où l'acheter</h3><ul class="buy-links">`;
+    buyLinks.forEach((l) => {
+      html += `<li><a href="${l.url}" target="_blank" rel="noopener noreferrer">${escapeHtml(l.label)}</a></li>`;
+    });
+    html += `</ul>`;
+  }
+
+  el.detailContent.innerHTML = html;
+  wireCreatorLinks(cat);
+
+  if (isDiscogs && versions.length > 1) {
     el.detailContent.appendChild(
       buildDetailSelect(
         "Édition / version",
@@ -824,22 +1070,52 @@ async function addDetailToCollection(status) {
 
   let title, externalIds, attributes, coverImageUrl;
 
-  if (cat.slug === "vinyl") {
+  if (DISCOGS_CATEGORIES.includes(cat.slug)) {
     title = activeVersion?.title ?? detail.title;
-    externalIds = { discogs_id: activeVersion?.discogs_id ?? detail.discogs_id };
+    externalIds = {
+      discogs_id: activeVersion?.discogs_id ?? detail.discogs_id,
+      ...(detail.artist_id && { discogs_artist_id: detail.artist_id }),
+    };
     const format = activeVersion?.format ?? detail.format;
     const year = activeVersion?.year ?? detail.pressing_year;
     attributes = {
+      ...(detail.artist && { artist: detail.artist }),
       ...(detail.label && { label: detail.label }),
       ...(year && { pressing_year: year }),
       ...(format && { format }),
+      ...(detail.genre && { genre: detail.genre }),
     };
     coverImageUrl = activeVersion?.thumb ?? detail.cover_image ?? null;
-  } else {
+  } else if (cat.slug === "video_game") {
     title = detail.title;
     externalIds = { rawg_id: detail.rawg_id };
     attributes = {
       ...(selectedPlatform && { platform: selectedPlatform }),
+      ...(detail.genre && { genre: detail.genre }),
+      ...(detail.release_year && { release_year: detail.release_year }),
+    };
+    coverImageUrl = detail.cover_image ?? null;
+  } else if (cat.slug === "book") {
+    title = detail.title;
+    externalIds = {
+      olid: detail.olid,
+      ...(detail.author_id && { ol_author_id: detail.author_id }),
+    };
+    attributes = {
+      ...(detail.author && { author: detail.author }),
+      ...(detail.publisher && { publisher: detail.publisher }),
+      ...(detail.year && { year: detail.year }),
+      ...(detail.isbn && { isbn: detail.isbn }),
+    };
+    coverImageUrl = detail.cover_image ?? null;
+  } else if (TMDB_CATEGORIES.includes(cat.slug)) {
+    title = detail.title;
+    externalIds = {
+      tmdb_id: detail.tmdb_id,
+      ...(detail.director_id && { tmdb_director_id: detail.director_id }),
+    };
+    attributes = {
+      ...(detail.director && { director: detail.director }),
       ...(detail.genre && { genre: detail.genre }),
       ...(detail.release_year && { release_year: detail.release_year }),
     };

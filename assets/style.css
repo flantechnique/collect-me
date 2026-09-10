@@ -43,6 +43,9 @@ header {
 
 header h1 { font-size: 1.4rem; margin: 0; letter-spacing: 0.01em; }
 
+#brand-logo { cursor: pointer; }
+#brand-logo:hover { color: var(--accent); }
+
 #auth-area {
   display: flex;
   align-items: center;
@@ -549,5 +552,70 @@ form#add-item-form button[type="submit"]:hover { background: var(--accent-hover)
 }
 
 .item-bubble-open:hover { background: var(--accent-hover); }
+
+/* ---------- lien artiste / studio -> toutes leurs œuvres ---------- */
+.creator-link {
+  color: var(--accent);
+  cursor: pointer;
+  font-weight: 700;
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+}
+.creator-link:hover { color: var(--accent-hover); }
+
+/* ---------- fiche complète : tracklist et liens boutiques ---------- */
+.detail-subheading {
+  margin: 1.4rem 0 0.6rem;
+  font-size: 0.95rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+
+.tracklist {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.tracklist li {
+  display: flex;
+  gap: 0.6rem;
+  padding: 0.5rem 0.85rem;
+  font-size: 0.88rem;
+  border-bottom: 1px solid var(--border);
+}
+.tracklist li:last-child { border-bottom: none; }
+.tracklist li:nth-child(odd) { background: rgba(239, 224, 199, 0.4); }
+
+.track-position { color: var(--muted); font-weight: 700; min-width: 1.8rem; }
+.track-duration { margin-left: auto; color: var(--muted); }
+
+.buy-links { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 0.5rem; }
+
+.buy-links a {
+  display: inline-block;
+  color: var(--accent);
+  font-weight: 700;
+  text-decoration: none;
+  padding: 0.45rem 0;
+}
+.buy-links a:hover { color: var(--accent-hover); text-decoration: underline; }
+
+/* ---------- casting (films) ---------- */
+.cast-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: 0.4rem 1rem;
+}
+
+.cast-list li { font-size: 0.85rem; }
+.cast-role { color: var(--muted); font-size: 0.78rem; }
 
 [hidden] { display: none !important; }

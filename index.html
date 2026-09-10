@@ -12,7 +12,7 @@
 </head>
 <body>
   <header>
-    <h1>📚 Collect Me</h1>
+    <h1 id="brand-logo" role="button" tabindex="0">📚 Collect Me</h1>
     <div id="auth-area"></div>
   </header>
 
@@ -73,6 +73,12 @@
     <section id="detail-view" hidden>
       <button id="detail-back" type="button" class="tab">← Retour</button>
       <div id="detail-content"></div>
+    </section>
+
+    <section id="creator-view" hidden>
+      <button id="creator-back" type="button" class="tab">← Retour</button>
+      <h2 id="creator-title"></h2>
+      <div id="creator-list"></div>
     </section>
   </main>
 
