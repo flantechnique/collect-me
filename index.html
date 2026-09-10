@@ -108,6 +108,18 @@
       <h2>Découvrir ma collection</h2>
 
       <div class="stats-section">
+        <h3>🪧 Vitrine publique</h3>
+        <label class="showcase-toggle" for="showcase-toggle-checkbox">
+          <input type="checkbox" id="showcase-toggle-checkbox" />
+          Rendre mes items possédés visibles publiquement via un lien
+        </label>
+        <div id="showcase-link-row" hidden>
+          <input id="showcase-link-input" type="text" readonly />
+          <button id="showcase-copy-btn" type="button">Copier le lien</button>
+        </div>
+      </div>
+
+      <div class="stats-section">
         <h3>🕰️ Frise chronologique</h3>
         <div id="timeline-content"></div>
       </div>
@@ -139,6 +151,14 @@
       <button id="creator-back" type="button" class="tab">← Retour</button>
       <h2 id="creator-title"></h2>
       <div id="creator-list"></div>
+    </section>
+
+    <section id="showcase-view" hidden>
+      <div class="showcase-header">
+        <h2 id="showcase-title">Vitrine de collection</h2>
+        <a href="./" class="tab">← Retour à Collect Me</a>
+      </div>
+      <div id="showcase-content"></div>
     </section>
   </main>
 

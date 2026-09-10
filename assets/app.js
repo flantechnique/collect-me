@@ -71,6 +71,13 @@ const el = {
   badgesContent: document.getElementById("badges-content"),
   quizStartBtn: document.getElementById("quiz-start-btn"),
   quizQuestion: document.getElementById("quiz-question"),
+  showcaseToggleCheckbox: document.getElementById("showcase-toggle-checkbox"),
+  showcaseLinkRow: document.getElementById("showcase-link-row"),
+  showcaseLinkInput: document.getElementById("showcase-link-input"),
+  showcaseCopyBtn: document.getElementById("showcase-copy-btn"),
+  showcaseView: document.getElementById("showcase-view"),
+  showcaseTitle: document.getElementById("showcase-title"),
+  showcaseContent: document.getElementById("showcase-content"),
 };
 
 let currentDetail = null;
@@ -1281,6 +1288,111 @@ async function loadFunView() {
   renderBadges(entries);
   el.rouletteResult.innerHTML = "";
   el.quizQuestion.innerHTML = "";
+  loadShowcaseSettings();
+}
+
+// ---- vitrine publique : opt-in + lien partageable (voir aussi renderPublicShowcase, qui
+// affiche la vitrine côté visiteur, sans connexion) ----
+async function loadShowcaseSettings() {
+  if (!currentUser) return;
+  const { data: profile, error } = await sb
+    .from("profiles")
+    .select("public_showcase")
+    .eq("id", currentUser.id)
+    .maybeSingle();
+  if (error) return console.error(error);
+  const isPublic = profile?.public_showcase ?? false;
+  el.showcaseToggleCheckbox.checked = isPublic;
+  updateShowcaseLinkVisibility(isPublic);
+}
+
+function updateShowcaseLinkVisibility(isPublic) {
+  el.showcaseLinkRow.hidden = !isPublic;
+  if (isPublic && currentUser) {
+    el.showcaseLinkInput.value = `${location.origin}${location.pathname}?showcase=${currentUser.id}`;
+  }
+}
+
+el.showcaseToggleCheckbox.addEventListener("change", async () => {
+  const isPublic = el.showcaseToggleCheckbox.checked;
+  const { error } = await sb.from("profiles").upsert(
+    {
+      id: currentUser.id,
+      public_showcase: isPublic,
+      display_name: currentUser.user_metadata?.full_name || currentUser.email || null,
+    },
+    { onConflict: "id" }
+  );
+  if (error) {
+    alert(error.message);
+    el.showcaseToggleCheckbox.checked = !isPublic;
+    return;
+  }
+  updateShowcaseLinkVisibility(isPublic);
+});
+
+el.showcaseCopyBtn.addEventListener("click", async () => {
+  try {
+    await navigator.clipboard.writeText(el.showcaseLinkInput.value);
+    const original = el.showcaseCopyBtn.textContent;
+    el.showcaseCopyBtn.textContent = "Copié !";
+    setTimeout(() => { el.showcaseCopyBtn.textContent = original; }, 1500);
+  } catch (_e) {
+    el.showcaseLinkInput.select();
+  }
+});
+
+// ---- rendu de la vitrine publique pour un visiteur (pas besoin d'être connecté) ----
+async function renderPublicShowcase(userId) {
+  document.querySelector("header").hidden = true;
+  document.querySelector("nav.main-nav").hidden = true;
+  ["home-view", "catalogue-view", "collection-view", "stats-view", "fun-view", "detail-view", "creator-view"]
+    .forEach((id) => {
+      const node = document.getElementById(id);
+      if (node) node.hidden = true;
+    });
+  el.showcaseView.hidden = false;
+
+  const { data: profile, error: profileError } = await sb
+    .from("profiles")
+    .select("display_name, public_showcase")
+    .eq("id", userId)
+    .maybeSingle();
+
+  if (profileError || !profile || !profile.public_showcase) {
+    el.showcaseTitle.textContent = "Vitrine introuvable";
+    el.showcaseContent.innerHTML = "<p class='empty'>Cette vitrine n'existe pas ou n'est plus publique.</p>";
+    return;
+  }
+
+  el.showcaseTitle.textContent = `📚 Collection de ${escapeHtml(profile.display_name || "un·e collectionneur·se")}`;
+
+  const { data: items, error } = await sb
+    .from("public_showcase_items")
+    .select("*")
+    .eq("user_id", userId);
+
+  if (error || !items?.length) {
+    el.showcaseContent.innerHTML = "<p class='empty'>Rien à montrer pour l'instant.</p>";
+    return;
+  }
+
+  const uniqueItems = [...new Map(items.map((i) => [i.item_id, i])).values()]
+    .sort((a, b) => a.title.localeCompare(b.title));
+
+  const grid = document.createElement("div");
+  grid.className = "pokedex-grid";
+  uniqueItems.forEach((item) => {
+    const card = document.createElement("div");
+    card.className = "pokedex-card owned";
+    card.innerHTML = `
+      <img src="${item.cover_image_url ?? ""}" alt="" onerror="this.style.visibility='hidden'" />
+      <div class="pokedex-title">${item.category_icon ?? ""} ${escapeHtml(item.title)}</div>
+    `;
+    grid.appendChild(card);
+  });
+  el.showcaseContent.innerHTML = "";
+  el.showcaseContent.appendChild(grid);
 }
 
 // ---- frise chronologique : les items possédés, regroupés par décennie de sortie ----
@@ -2289,5 +2401,11 @@ async function loadTopReferences(cat) {
 }
 
 // ---------- boot ----------
-initAuth();
-loadCategories();
+const showcaseUserId = new URLSearchParams(location.search).get("showcase");
+if (showcaseUserId) {
+  // lien de vitrine publique : pas d'auth, pas de catalogue — juste la collection exposée
+  renderPublicShowcase(showcaseUserId);
+} else {
+  initAuth();
+  loadCategories();
+}
