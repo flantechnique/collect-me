@@ -1032,6 +1032,11 @@ form#add-item-form button[type="submit"]:hover { background: var(--accent-hover)
   white-space: nowrap;
 }
 
+.recommendation-reason {
+  margin: 0.2rem 0 0;
+  font-size: 0.72rem;
+}
+
 .pokedex-badge {
   position: absolute;
   top: 0.5rem;

@@ -65,6 +65,7 @@ const el = {
   collectionViewToggle: document.getElementById("collection-view-toggle"),
   viewFunBtn: document.getElementById("view-fun"),
   funView: document.getElementById("fun-view"),
+  recommendationsContent: document.getElementById("recommendations-content"),
   timelineContent: document.getElementById("timeline-content"),
   rouletteBtn: document.getElementById("roulette-btn"),
   rouletteResult: document.getElementById("roulette-result"),
@@ -525,7 +526,14 @@ async function loadMyCollection() {
   const filterSlug = el.collectionFilter.value;
   let rows = filterSlug ? data.filter((r) => r.items.categories.slug === filterSlug) : data;
   if (collectionSearchQuery) {
-    rows = rows.filter((r) => r.items.title.toLowerCase().includes(collectionSearchQuery));
+    rows = rows.filter((r) => {
+      const q = collectionSearchQuery;
+      if (r.items.title.toLowerCase().includes(q)) return true;
+      if (Object.values(r.items.attributes || {}).some((v) => String(v).toLowerCase().includes(q))) return true;
+      if (r.condition && r.condition.toLowerCase().includes(q)) return true;
+      if (r.notes && r.notes.toLowerCase().includes(q)) return true;
+      return false;
+    });
   }
 
   el.collectionList.innerHTML = "";
@@ -1351,11 +1359,86 @@ async function loadFunView() {
   }
   el.timelineContent.innerHTML = "<p class='empty'>Chargement...</p>";
   const entries = await fetchCollectionEntries();
+  renderRecommendations(entries);
   renderTimeline(entries);
   renderBadges(entries);
   el.rouletteResult.innerHTML = "";
   el.quizQuestion.innerHTML = "";
   loadShowcaseSettings();
+}
+
+// ---- recommandations "si tu as aimé X" : suggestions basées sur les genres des items
+// possédés, comparés au reste du catalogue partagé (pas seulement ce que l'utilisateur a
+// ajouté lui-même). book/stamp/coin n'ont pas d'attribut "genre" et sont donc naturellement
+// exclus de ce calcul. ----
+async function renderRecommendations(entries) {
+  el.recommendationsContent.innerHTML = "<p class='empty'>Chargement...</p>";
+  const owned = entries.filter((e) => e.status === "owned");
+  const ownedItemIds = new Set(owned.map((e) => e.item_id));
+
+  const genresByCategory = new Map(); // category_id -> Set(genre)
+  owned.forEach((e) => {
+    const genreRaw = e.items.attributes?.genre;
+    if (!genreRaw) return;
+    const catId = e.items.category_id;
+    if (!genresByCategory.has(catId)) genresByCategory.set(catId, new Set());
+    String(genreRaw)
+      .split(",")
+      .map((g) => g.trim())
+      .filter(Boolean)
+      .forEach((g) => genresByCategory.get(catId).add(g));
+  });
+
+  if (!genresByCategory.size) {
+    el.recommendationsContent.innerHTML =
+      "<p class='empty'>Pas encore assez d'items avec un genre renseigné pour te faire des suggestions.</p>";
+    return;
+  }
+
+  const { data: candidateItems, error } = await sb
+    .from("items")
+    .select("*, categories(*)")
+    .in("category_id", [...genresByCategory.keys()]);
+  if (error || !candidateItems) {
+    el.recommendationsContent.innerHTML = "<p class='empty'>Impossible de charger les suggestions.</p>";
+    return;
+  }
+
+  const scored = candidateItems
+    .filter((item) => !ownedItemIds.has(item.id))
+    .map((item) => {
+      const genres = genresByCategory.get(item.category_id);
+      const itemGenres = String(item.attributes?.genre ?? "")
+        .split(",")
+        .map((g) => g.trim())
+        .filter(Boolean);
+      return { item, matched: itemGenres.filter((g) => genres.has(g)) };
+    })
+    .filter((x) => x.matched.length)
+    .sort((a, b) => b.matched.length - a.matched.length)
+    .slice(0, 6);
+
+  if (!scored.length) {
+    el.recommendationsContent.innerHTML =
+      "<p class='empty'>Rien de nouveau à te suggérer pour l'instant dans le catalogue.</p>";
+    return;
+  }
+
+  const grid = document.createElement("div");
+  grid.className = "pokedex-grid";
+  scored.forEach(({ item, matched }) => {
+    const card = document.createElement("div");
+    card.className = "pokedex-card owned";
+    card.innerHTML = `
+      <img src="${item.cover_image_url ?? ""}" alt="" onerror="this.style.visibility='hidden'" />
+      <div class="pokedex-title">${item.categories.icon ?? ""} ${escapeHtml(item.title)}</div>
+      <p class="empty recommendation-reason">Parce que tu aimes ${escapeHtml(matched[0])}</p>
+    `;
+    attachItemBubble(card, item, item.categories);
+    grid.appendChild(card);
+  });
+  el.recommendationsContent.innerHTML = "";
+  el.recommendationsContent.appendChild(grid);
 }
 
 // ---- vitrine publique : opt-in + lien partageable (voir aussi renderPublicShowcase, qui
@@ -1816,6 +1899,11 @@ function renderLocalItemDetail(item, cat) {
   el.detailContent.innerHTML = html;
   wireCreatorLinks(cat);
 
+  const shareActions = document.createElement("div");
+  shareActions.className = "actions detail-actions";
+  shareActions.appendChild(buildShareButton(item.id));
+  el.detailContent.appendChild(shareActions);
+
   if (currentUser) {
     const actions = document.createElement("div");
     actions.className = "actions detail-actions";
@@ -1836,6 +1924,27 @@ function renderLocalItemDetail(item, cat) {
   }
 
   renderOwnershipCounts(el.detailContent, item.id);
+}
+
+// bouton "Partager" réutilisé sur la fiche locale et la fiche externe riche : copie un lien
+// ?item=<id> qui rouvre toujours la fiche LOCALE (jamais d'appel API externe), donc utilisable
+// par un visiteur non connecté sans déclencher l'exigence d'authentification des recherches externes
+function buildShareButton(itemId) {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.textContent = "🔗 Partager cette fiche";
+  btn.onclick = async () => {
+    const url = `${location.origin}${location.pathname}?item=${itemId}`;
+    try {
+      await navigator.clipboard.writeText(url);
+      const original = btn.textContent;
+      btn.textContent = "Copié !";
+      setTimeout(() => { btn.textContent = original; }, 1500);
+    } catch (_e) {
+      prompt("Copie ce lien :", url);
+    }
+  };
+  return btn;
 }
 
 // ---------- édition d'une fiche catalogue (réservée à son créateur, cf. RLS) ----------
@@ -2256,6 +2365,9 @@ function renderDetail() {
   wantedBtn.textContent = "Ajouter à ma wantlist";
   wantedBtn.onclick = () => addDetailToCollection("wanted");
   actions.append(ownedBtn, wantedBtn);
+  if (currentDetail.localItemId) {
+    actions.appendChild(buildShareButton(currentDetail.localItemId));
+  }
   el.detailContent.appendChild(actions);
 
   if (currentDetail.localItemId) {
@@ -2467,12 +2579,34 @@ async function loadTopReferences(cat) {
     });
 }
 
+// ---------- partage d'une fiche unique ----------
+// Toujours la fiche LOCALE (jamais openDetail/l'API externe) : elle contient déjà tout ce
+// qui a été mis en cache à l'ajout (titre, visuel, attributs) et ne nécessite pas d'être
+// connecté ni d'appeler une API tierce payante/limitée — contrairement à la recherche externe.
+async function openSharedItem(itemId) {
+  const { data: item, error } = await sb
+    .from("items")
+    .select("*, categories(*)")
+    .eq("id", itemId)
+    .maybeSingle();
+  if (error || !item) {
+    alert("Cet item n'existe pas ou plus dans le catalogue.");
+    return;
+  }
+  const cat = item.categories;
+  selectCategory(cat.slug);
+  renderLocalItemDetail(item, cat);
+}
+
 // ---------- boot ----------
 const showcaseUserId = new URLSearchParams(location.search).get("showcase");
+const sharedItemId = new URLSearchParams(location.search).get("item");
 if (showcaseUserId) {
   // lien de vitrine publique : pas d'auth, pas de catalogue — juste la collection exposée
   renderPublicShowcase(showcaseUserId);
 } else {
   initAuth();
-  loadCategories();
+  loadCategories().then(() => {
+    if (sharedItemId) openSharedItem(sharedItemId);
+  });
 }
