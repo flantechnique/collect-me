@@ -191,4 +191,66 @@ form#add-item-form button[type="submit"] {
 
 .empty { color: var(--muted); }
 
+#detail-back { margin-bottom: 1.25rem; }
+
+.detail-header {
+  display: flex;
+  gap: 1.25rem;
+  align-items: flex-start;
+  margin-bottom: 1rem;
+}
+
+.detail-cover {
+  width: 160px;
+  height: 160px;
+  object-fit: cover;
+  border-radius: 10px;
+  background: #22262f;
+  flex-shrink: 0;
+}
+
+.detail-header h2 { margin: 0 0 0.25rem; }
+.detail-header .muted { color: var(--muted); margin: 0; }
+
+.detail-description {
+  color: var(--muted);
+  font-size: 0.9rem;
+  line-height: 1.55;
+  margin-bottom: 1rem;
+  white-space: pre-line;
+}
+
+.detail-selector {
+  display: block;
+  margin: 0.9rem 0;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.detail-selector select {
+  display: block;
+  margin-top: 0.35rem;
+  width: 100%;
+  max-width: 360px;
+}
+
+.detail-actions { margin-top: 1.25rem; }
+.detail-actions button {
+  background: var(--accent);
+  color: white;
+  border: none;
+  padding: 0.55rem 1.1rem;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.collection-category-header {
+  margin: 1.5rem 0 0.5rem;
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+.collection-category-header:first-child { margin-top: 0; }
+
 [hidden] { display: none !important; }

@@ -24,7 +24,12 @@ const el = {
   externalSearch: document.getElementById("external-search"),
   externalSearchInput: document.getElementById("external-search-input"),
   externalSearchResults: document.getElementById("external-search-results"),
+  detailView: document.getElementById("detail-view"),
+  detailContent: document.getElementById("detail-content"),
+  detailBack: document.getElementById("detail-back"),
 };
+
+let currentDetail = null;
 
 // Catégories pour lesquelles une edge function de recherche externe existe.
 // Ajouter une entrée ici active automatiquement le bloc de recherche pour la catégorie.
@@ -251,13 +256,11 @@ async function loadMyCollection() {
     el.collectionList.innerHTML = "<p class='empty'>Connecte-toi pour voir ta collection.</p>";
     return;
   }
-  let query = sb
+  const { data, error } = await sb
     .from("collection_entries")
     .select("*, items(*, categories(*))")
     .eq("user_id", currentUser.id)
     .order("created_at", { ascending: false });
-
-  const { data, error } = await query;
   if (error) return console.error(error);
 
   const filterSlug = el.collectionFilter.value;
@@ -268,15 +271,69 @@ async function loadMyCollection() {
     el.collectionList.innerHTML = "<p class='empty'>Rien ici pour l'instant.</p>";
     return;
   }
+
+  // regroupe par item + statut, pour afficher les doublons (plusieurs exemplaires)
+  // comme un seul bloc avec un compteur plutôt qu'une carte répétée
+  const groups = new Map();
   rows.forEach((entry) => {
-    const card = document.createElement("div");
-    card.className = "card";
-    card.innerHTML = `
-      <h3>${entry.items.categories.icon ?? ""} ${entry.items.title}</h3>
-      <p class="status status-${entry.status}">${statusLabel(entry.status)}</p>
-    `;
-    el.collectionList.appendChild(card);
+    const key = `${entry.item_id}:${entry.status}`;
+    if (!groups.has(key)) {
+      groups.set(key, { item: entry.items, status: entry.status, entryIds: [] });
+    }
+    groups.get(key).entryIds.push(entry.id);
   });
+
+  // regroupement par catégorie (trié par type) — masqué quand un filtre de catégorie est actif
+  const byCategory = new Map();
+  groups.forEach((group) => {
+    const catName = group.item.categories.name;
+    if (!byCategory.has(catName)) byCategory.set(catName, []);
+    byCategory.get(catName).push(group);
+  });
+
+  [...byCategory.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .forEach(([catName, catGroups]) => {
+      if (!filterSlug) {
+        const header = document.createElement("h3");
+        header.className = "collection-category-header";
+        header.textContent = catName;
+        el.collectionList.appendChild(header);
+      }
+      catGroups.forEach((group) => el.collectionList.appendChild(renderCollectionGroup(group)));
+    });
+}
+
+function renderCollectionGroup(group) {
+  const { item, status, entryIds } = group;
+  const card = document.createElement("div");
+  card.className = "card";
+  card.innerHTML = `
+    <h3>${item.categories.icon ?? ""} ${item.title}</h3>
+    <p class="status status-${status}">${statusLabel(status)}${entryIds.length > 1 ? ` × ${entryIds.length}` : ""}</p>
+  `;
+
+  const actions = document.createElement("div");
+  actions.className = "actions";
+
+  const minusBtn = document.createElement("button");
+  minusBtn.textContent = entryIds.length > 1 ? "− 1 exemplaire" : "Retirer";
+  minusBtn.onclick = () => removeCollectionEntry(entryIds[entryIds.length - 1]);
+  actions.appendChild(minusBtn);
+
+  const plusBtn = document.createElement("button");
+  plusBtn.textContent = "+ 1 doublon";
+  plusBtn.onclick = () => addToCollection(item.id, status);
+  actions.appendChild(plusBtn);
+
+  card.appendChild(actions);
+  return card;
+}
+
+async function removeCollectionEntry(entryId) {
+  const { error } = await sb.from("collection_entries").delete().eq("id", entryId);
+  if (error) return alert(error.message);
+  loadMyCollection();
 }
 
 function statusLabel(status) {
@@ -289,9 +346,12 @@ el.collectionFilter.addEventListener("change", loadMyCollection);
 el.viewCatalogueBtn.addEventListener("click", () => switchView("catalogue"));
 el.viewCollectionBtn.addEventListener("click", () => switchView("collection"));
 
+el.detailBack.addEventListener("click", () => switchView("catalogue"));
+
 function switchView(view) {
   el.catalogueView.hidden = view !== "catalogue";
   el.collectionView.hidden = view !== "collection";
+  el.detailView.hidden = view !== "detail";
   el.viewCatalogueBtn.classList.toggle("active", view === "catalogue");
   el.viewCollectionBtn.classList.toggle("active", view === "collection");
   if (view === "collection") loadMyCollection();
@@ -384,21 +444,181 @@ function renderExternalResults(results, cat) {
     `;
     row.appendChild(info);
 
-    row.onclick = () => importExternalResult(r, cat);
+    row.onclick = () => openDetail(r, cat);
     el.externalSearchResults.appendChild(row);
   });
 }
 
-async function importExternalResult(r, cat) {
-  const mapper = CATEGORY_RESULT_MAPPERS[cat.slug];
-  const { attributes, externalIds } = mapper(r);
+// ---------- fiche détail (ouverte depuis une suggestion de recherche) ----------
+function escapeHtml(str) {
+  return String(str).replace(/[&<>"']/g, (c) => (
+    { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
+  ));
+}
+
+async function openDetail(r, cat) {
+  el.externalSearchResults.hidden = true;
+  el.externalSearchInput.value = "";
+  switchView("detail");
+  el.detailContent.innerHTML = "<p class='empty'>Chargement...</p>";
+
+  const fnName = CATEGORY_SEARCH_FUNCTIONS[cat.slug];
+  const id = cat.slug === "vinyl" ? r.discogs_id : r.rawg_id;
+
+  const { data: { session } } = await sb.auth.getSession();
+  const res = await fetch(
+    `${SUPABASE_URL}/functions/v1/${fnName}?id=${encodeURIComponent(id)}`,
+    { headers: { Authorization: `Bearer ${session.access_token}` } }
+  );
+  const payload = await res.json();
+  if (!res.ok) {
+    el.detailContent.innerHTML = `<p class='empty'>Erreur : ${payload.error ?? res.statusText}</p>`;
+    return;
+  }
+
+  currentDetail = {
+    cat,
+    detail: payload.detail,
+    versions: payload.versions ?? [],
+    platforms: payload.platforms ?? [],
+    selectedVersionIndex: 0,
+    selectedPlatform: (payload.platforms ?? [])[0] ?? null,
+  };
+  renderDetail();
+}
+
+function renderDetail() {
+  const { cat, detail, versions, platforms, selectedVersionIndex, selectedPlatform } = currentDetail;
+  const activeVersion = versions[selectedVersionIndex];
+  const displayTitle = activeVersion?.title ?? detail.title;
+  const displayImage = activeVersion?.thumb ?? detail.cover_image;
+
+  let html = `
+    <div class="detail-header">
+      <img class="detail-cover" src="${displayImage ?? ""}" alt="" onerror="this.style.visibility='hidden'" />
+      <div>
+        <h2>${escapeHtml(displayTitle)}</h2>
+        ${detail.artist ? `<p class="muted">${escapeHtml(detail.artist)}</p>` : ""}
+      </div>
+    </div>
+  `;
+
+  if (detail.description) {
+    const desc = String(detail.description);
+    const truncated = desc.length > 600 ? `${desc.slice(0, 600)}…` : desc;
+    html += `<p class="detail-description">${escapeHtml(truncated)}</p>`;
+  }
+
+  html += `<ul class="attrs">`;
+  if (cat.slug === "vinyl") {
+    if (detail.label) html += `<li>Label : ${escapeHtml(detail.label)}</li>`;
+    const format = activeVersion?.format ?? detail.format;
+    if (format) html += `<li>Format : ${escapeHtml(format)}</li>`;
+    const year = activeVersion?.year ?? detail.pressing_year;
+    if (year) html += `<li>Année : ${escapeHtml(String(year))}</li>`;
+    if (activeVersion?.country) html += `<li>Pays : ${escapeHtml(activeVersion.country)}</li>`;
+  } else {
+    if (selectedPlatform) html += `<li>Plateforme : ${escapeHtml(selectedPlatform)}</li>`;
+    if (detail.genre) html += `<li>Genre : ${escapeHtml(detail.genre)}</li>`;
+    if (detail.publisher) html += `<li>Éditeur : ${escapeHtml(detail.publisher)}</li>`;
+    if (detail.release_year) html += `<li>Année de sortie : ${escapeHtml(String(detail.release_year))}</li>`;
+  }
+  html += `</ul>`;
+
+  el.detailContent.innerHTML = html;
+
+  if (cat.slug === "vinyl" && versions.length > 1) {
+    el.detailContent.appendChild(
+      buildDetailSelect(
+        "Édition / version",
+        versions.map((v, i) => [i, [v.format, v.year, v.country].filter(Boolean).join(" — ")]),
+        selectedVersionIndex,
+        (value) => {
+          currentDetail.selectedVersionIndex = Number(value);
+          renderDetail();
+        }
+      )
+    );
+  }
+
+  if (cat.slug === "video_game" && platforms.length > 1) {
+    el.detailContent.appendChild(
+      buildDetailSelect(
+        "Plateforme",
+        platforms.map((p) => [p, p]),
+        selectedPlatform,
+        (value) => {
+          currentDetail.selectedPlatform = value;
+          renderDetail();
+        }
+      )
+    );
+  }
+
+  const actions = document.createElement("div");
+  actions.className = "actions detail-actions";
+  const ownedBtn = document.createElement("button");
+  ownedBtn.textContent = "Ajouter à ma collection";
+  ownedBtn.onclick = () => addDetailToCollection("owned");
+  const wantedBtn = document.createElement("button");
+  wantedBtn.textContent = "Ajouter à ma wantlist";
+  wantedBtn.onclick = () => addDetailToCollection("wanted");
+  actions.append(ownedBtn, wantedBtn);
+  el.detailContent.appendChild(actions);
+}
+
+function buildDetailSelect(labelText, options, selectedValue, onChange) {
+  const wrapper = document.createElement("label");
+  wrapper.className = "detail-selector";
+  wrapper.textContent = labelText;
+  const select = document.createElement("select");
+  select.innerHTML = options
+    .map(([value, label]) => `<option value="${escapeHtml(value)}">${escapeHtml(label)}</option>`)
+    .join("");
+  select.value = selectedValue;
+  select.onchange = () => onChange(select.value);
+  wrapper.appendChild(select);
+  return wrapper;
+}
+
+async function addDetailToCollection(status) {
+  if (!currentUser) {
+    alert("Connecte-toi pour ajouter un item.");
+    return;
+  }
+  const { cat, detail, versions, selectedVersionIndex, selectedPlatform } = currentDetail;
+  const activeVersion = versions[selectedVersionIndex];
+
+  let title, externalIds, attributes, coverImageUrl;
+
+  if (cat.slug === "vinyl") {
+    title = activeVersion?.title ?? detail.title;
+    externalIds = { discogs_id: activeVersion?.discogs_id ?? detail.discogs_id };
+    const format = activeVersion?.format ?? detail.format;
+    const year = activeVersion?.year ?? detail.pressing_year;
+    attributes = {
+      ...(detail.label && { label: detail.label }),
+      ...(year && { pressing_year: year }),
+      ...(format && { format }),
+    };
+    coverImageUrl = activeVersion?.thumb ?? detail.cover_image ?? null;
+  } else {
+    title = detail.title;
+    externalIds = { rawg_id: detail.rawg_id };
+    attributes = {
+      ...(selectedPlatform && { platform: selectedPlatform }),
+      ...(detail.genre && { genre: detail.genre }),
+      ...(detail.release_year && { release_year: detail.release_year }),
+    };
+    coverImageUrl = detail.cover_image ?? null;
+  }
 
   const { data, error } = await sb
     .from("items")
     .insert({
       category_id: cat.id,
-      title: r.title,
-      cover_image_url: r.cover_image ?? null,
+      title,
+      cover_image_url: coverImageUrl,
       external_ids: externalIds,
       attributes,
       source: "external_api",
@@ -409,11 +629,9 @@ async function importExternalResult(r, cat) {
 
   if (error) return alert(error.message);
 
-  el.externalSearchResults.hidden = true;
-  el.externalSearchResults.innerHTML = "";
-  el.externalSearchInput.value = "";
-  loadCatalogue();
-  addToCollection(data.id, "owned");
+  await addToCollection(data.id, status);
+  switchView("catalogue");
+  selectCategory(cat.slug);
 }
 
 // ---------- boot ----------
