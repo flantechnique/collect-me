@@ -681,6 +681,10 @@ async function toggleEntryDetailsForm(card, entryId) {
     <label class="full-width">Notes
       <textarea name="notes">${escapeHtml(entry.notes ?? "")}</textarea>
     </label>
+    <label class="full-width">Photos personnelles
+      <div class="entry-photos-gallery"></div>
+      <input type="file" accept="image/*" multiple class="entry-photos-input" />
+    </label>
     <div class="actions">
       <button type="submit">Enregistrer</button>
       <button type="button" class="cancel-btn">Annuler</button>
@@ -688,6 +692,36 @@ async function toggleEntryDetailsForm(card, entryId) {
   `;
   form.addEventListener("click", (e) => e.stopPropagation());
   form.querySelector(".cancel-btn").addEventListener("click", () => form.remove());
+
+  // photos personnelles : upload direct vers le bucket Storage privé "personal-photos",
+  // chemin <user_id>/<entry_id>/<fichier> — cohérent avec les policies RLS du bucket
+  const photoPaths = [...(entry.personal_photos ?? [])];
+  const gallery = form.querySelector(".entry-photos-gallery");
+  renderEntryPhotosGallery(gallery, photoPaths, entryId);
+
+  const photoInput = form.querySelector(".entry-photos-input");
+  photoInput.addEventListener("change", async () => {
+    const files = [...photoInput.files];
+    photoInput.value = "";
+    if (!files.length) return;
+    gallery.insertAdjacentHTML("beforeend", "<p class='empty'>Envoi en cours...</p>");
+    for (const file of files) {
+      const path = `${currentUser.id}/${entryId}/${crypto.randomUUID()}-${file.name}`;
+      const { error: uploadError } = await sb.storage.from("personal-photos").upload(path, file);
+      if (uploadError) {
+        alert(uploadError.message);
+        continue;
+      }
+      photoPaths.push(path);
+    }
+    const { error: saveError } = await sb
+      .from("collection_entries")
+      .update({ personal_photos: photoPaths })
+      .eq("id", entryId);
+    if (saveError) alert(saveError.message);
+    renderEntryPhotosGallery(gallery, photoPaths, entryId);
+  });
+
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
     const fd = new FormData(form);
@@ -705,6 +739,39 @@ async function toggleEntryDetailsForm(card, entryId) {
   });
 
   card.appendChild(form);
+}
+
+// affiche les vignettes des photos personnelles d'un exemplaire — le bucket étant privé,
+// chaque vignette nécessite une URL signée (valable 1h, largement assez pour l'affichage)
+async function renderEntryPhotosGallery(gallery, photoPaths, entryId) {
+  gallery.innerHTML = "";
+  if (!photoPaths.length) {
+    gallery.innerHTML = "<p class='empty'>Pas encore de photo.</p>";
+    return;
+  }
+  const { data: signedUrls, error } = await sb.storage
+    .from("personal-photos")
+    .createSignedUrls(photoPaths, 3600);
+  if (error) {
+    gallery.innerHTML = "<p class='empty'>Impossible de charger les photos.</p>";
+    return;
+  }
+  signedUrls.forEach((signed, i) => {
+    const path = photoPaths[i];
+    const thumb = document.createElement("div");
+    thumb.className = "entry-photo-thumb";
+    thumb.innerHTML = `
+      <img src="${signed.signedUrl ?? ""}" alt="" />
+      <button type="button" class="entry-photo-remove" aria-label="Supprimer">×</button>
+    `;
+    thumb.querySelector(".entry-photo-remove").addEventListener("click", async () => {
+      await sb.storage.from("personal-photos").remove([path]);
+      photoPaths.splice(photoPaths.indexOf(path), 1);
+      await sb.from("collection_entries").update({ personal_photos: photoPaths }).eq("id", entryId);
+      renderEntryPhotosGallery(gallery, photoPaths, entryId);
+    });
+    gallery.appendChild(thumb);
+  });
 }
 
 function statusLabel(status) {
