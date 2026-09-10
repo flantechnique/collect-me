@@ -1738,7 +1738,7 @@ function exportCollectionJson() {
 
 // export "réimportable" : un fichier CSV par catégorie, exactement dans le format attendu
 // par l'import (mêmes colonnes que downloadCsvTemplate, mêmes codes de statut) — permet un
-// aller-retour propre, y compris entre deux instances de Collect Me
+// aller-retour propre, y compris entre deux instances de Glanure
 function exportReimportableCsv() {
   if (!collectionEntriesCache.length) return;
   const byCategory = new Map(); // slug -> { cat, rows }
@@ -2012,7 +2012,7 @@ el.wrappedGenerateBtn.addEventListener("click", async () => {
     <button type="button" class="wrapped-copy-btn">📋 Copier en texte</button>
   `;
   card.querySelector(".wrapped-copy-btn").addEventListener("click", async () => {
-    const text = `📊 Mon année ${year} en collection sur Collect Me :\n${addedThisYear.length} nouveaux items, dont surtout ${topCategory[0]} (${topCategory[1]})\n${totalOwned} items au total dans ma collection !`;
+    const text = `📊 Mon année ${year} en collection sur Glanure :\n${addedThisYear.length} nouveaux items, dont surtout ${topCategory[0]} (${topCategory[1]})\n${totalOwned} items au total dans ma collection !`;
     try {
       await navigator.clipboard.writeText(text);
       alert("Copié !");
