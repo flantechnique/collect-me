@@ -1810,7 +1810,7 @@ form#add-item-form button[type="submit"]:hover { background: var(--accent-hover)
 .label-card {
   display: flex;
   gap: 0.7rem;
-  align-items: center;
+  align-items: center; 
   border: 1px dashed var(--border);
   border-radius: 10px;
   padding: 0.7rem;
