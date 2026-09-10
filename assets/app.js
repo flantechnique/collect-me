@@ -80,6 +80,7 @@ const el = {
   recommendationsContent: document.getElementById("recommendations-content"),
   compareInput: document.getElementById("compare-input"),
   compareBtn: document.getElementById("compare-btn"),
+  compareSummary: document.getElementById("compare-summary"),
   compareResult: document.getElementById("compare-result"),
   digestContent: document.getElementById("digest-content"),
   wantlistAlertsContent: document.getElementById("wantlist-alerts-content"),
@@ -99,6 +100,8 @@ const el = {
   showcaseContent: document.getElementById("showcase-content"),
   showcaseForsaleSection: document.getElementById("showcase-forsale-section"),
   showcaseForsaleContent: document.getElementById("showcase-forsale-content"),
+  showcaseActivitySection: document.getElementById("showcase-activity-section"),
+  showcaseActivityContent: document.getElementById("showcase-activity-content"),
   collectionPrintLabelsBtn: document.getElementById("collection-print-labels-btn"),
   collectionBulkBar: document.getElementById("collection-bulk-bar"),
   collectionBulkCount: document.getElementById("collection-bulk-count"),
@@ -1782,6 +1785,7 @@ async function loadFunView() {
   el.rouletteResult.innerHTML = "";
   el.quizQuestion.innerHTML = "";
   el.compareResult.innerHTML = "";
+  el.compareSummary.innerHTML = "";
 }
 
 el.funAccountLink.addEventListener("click", () => openAccountView());
@@ -1972,6 +1976,7 @@ async function compareWithFriend() {
   }
 
   el.compareResult.innerHTML = "<p class='empty'>Comparaison en cours...</p>";
+  el.compareSummary.innerHTML = "";
 
   const { data: profile } = await sb
     .from("profiles")
@@ -1991,9 +1996,45 @@ async function compareWithFriend() {
   }
 
   const entries = collectionEntriesCache.length ? collectionEntriesCache : await fetchCollectionEntries();
-  const ownedIds = new Set(entries.filter((e) => e.status === "owned").map((e) => e.item_id));
+  const myOwned = entries.filter((e) => e.status === "owned");
+  const ownedIds = new Set(myOwned.map((e) => e.item_id));
   const uniqueFriendItems = [...new Map((friendItems ?? []).map((i) => [i.item_id, i])).values()];
   const common = uniqueFriendItems.filter((i) => ownedIds.has(i.item_id));
+
+  // ---- duel : tailles de collection + répartition par catégorie, qui en a le plus ----
+  const myByCategory = new Map();
+  myOwned.forEach((e) => {
+    const name = e.items.categories.name;
+    myByCategory.set(name, (myByCategory.get(name) ?? 0) + 1);
+  });
+  const friendByCategory = new Map();
+  uniqueFriendItems.forEach((i) => {
+    friendByCategory.set(i.category_name, (friendByCategory.get(i.category_name) ?? 0) + 1);
+  });
+  const allCategoryNames = [...new Set([...myByCategory.keys(), ...friendByCategory.keys()])].sort();
+
+  const summary = document.createElement("div");
+  summary.className = "duel-summary";
+  const myTotal = myOwned.length;
+  const friendTotal = uniqueFriendItems.length;
+  const totalWinner = myTotal === friendTotal ? "égalité" : myTotal > friendTotal ? "toi" : escapeHtml(friendName);
+  summary.innerHTML = `
+    <p class="duel-total">🏆 ${myTotal} vs ${friendTotal} items possédés — ${
+      totalWinner === "égalité" ? "égalité parfaite !" : `avantage ${totalWinner === "toi" ? "à toi" : `à ${totalWinner}`} !`
+    }</p>
+    <table class="duel-table">
+      <thead><tr><th>Catégorie</th><th>Toi</th><th></th><th>${escapeHtml(friendName)}</th></tr></thead>
+      <tbody>
+        ${allCategoryNames.map((name) => {
+          const mine = myByCategory.get(name) ?? 0;
+          const theirs = friendByCategory.get(name) ?? 0;
+          const badge = mine === theirs ? "🤝" : mine > theirs ? "◀️" : "▶️";
+          return `<tr><td>${escapeHtml(name)}</td><td>${mine}</td><td>${badge}</td><td>${theirs}</td></tr>`;
+        }).join("")}
+      </tbody>
+    </table>
+  `;
+  el.compareSummary.appendChild(summary);
 
   if (!common.length) {
     el.compareResult.innerHTML = `<p class='empty'>Aucun item en commun avec ${escapeHtml(friendName)} pour l'instant.</p>`;
@@ -2460,6 +2501,28 @@ async function renderPublicShowcase({ userId, username }) {
     el.showcaseForsaleContent.appendChild(forSaleGrid);
   } else {
     el.showcaseForsaleSection.hidden = true;
+  }
+
+  // fil d'activité : les derniers ajouts, façon Letterboxd — chaque exemplaire ajouté compte
+  // comme un événement, y compris un doublon d'un item déjà présent
+  if (items?.length) {
+    const recent = [...items].sort((a, b) => new Date(b.created_at) - new Date(a.created_at)).slice(0, 8);
+    el.showcaseActivitySection.hidden = false;
+    el.showcaseActivityContent.innerHTML = "";
+    recent.forEach((item) => {
+      const row = document.createElement("div");
+      row.className = "activity-row";
+      row.innerHTML = `
+        <img src="${item.cover_image_url ?? ""}" alt="" onerror="this.style.visibility='hidden'" />
+        <div class="activity-info">
+          <span class="activity-title">${item.category_icon ?? ""} ${escapeHtml(item.title)}</span>
+          <span class="activity-date">Ajouté le ${new Date(item.created_at).toLocaleDateString("fr-FR")}</span>
+        </div>
+      `;
+      el.showcaseActivityContent.appendChild(row);
+    });
+  } else {
+    el.showcaseActivitySection.hidden = true;
   }
 
   if (error || !items?.length) {

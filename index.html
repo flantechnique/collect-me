@@ -142,12 +142,13 @@
       </div>
 
       <div class="stats-section">
-        <h3>🤝 Comparer avec un ami</h3>
-        <p class="empty">Colle le lien de vitrine (ou l'identifiant) d'un·e ami·e ayant activé sa vitrine publique.</p>
+        <h3>🤜🤛 Duel avec un ami</h3>
+        <p class="empty">Colle le lien de vitrine (ou l'identifiant/pseudo) d'un·e ami·e ayant activé sa vitrine publique.</p>
         <div class="compare-row">
-          <input id="compare-input" type="text" placeholder="Lien ou identifiant de vitrine..." autocomplete="off" />
+          <input id="compare-input" type="text" placeholder="Lien, pseudo ou identifiant de vitrine..." autocomplete="off" />
           <button id="compare-btn" type="button">Comparer</button>
         </div>
+        <div id="compare-summary"></div>
         <div id="compare-result"></div>
       </div>
 
@@ -326,6 +327,11 @@
       <div id="showcase-forsale-section" class="stats-section" hidden>
         <h3>🛒 À vendre</h3>
         <div id="showcase-forsale-content"></div>
+      </div>
+
+      <div id="showcase-activity-section" class="stats-section" hidden>
+        <h3>🕐 Activité récente</h3>
+        <div id="showcase-activity-content" class="activity-feed"></div>
       </div>
 
       <div class="stats-section">
