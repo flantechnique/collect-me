@@ -157,7 +157,7 @@ function selectCategory(slug) {
 
   loadCommunityFeed(cat);
   subscribeCommunityFeed(cat);
-  loadTopSearches(cat);
+  loadTopReferences(cat);
 }
 
 // ---------- catalogue ----------
@@ -444,7 +444,6 @@ async function searchExternal() {
     return;
   }
   renderExternalResults(payload.results ?? [], cat);
-  loadTopSearches(cat); // la recherche vient d'être journalisée côté serveur
 }
 
 function renderExternalResults(results, cat) {
@@ -501,7 +500,7 @@ async function openDetail(r, cat) {
 
   const { data: { session } } = await sb.auth.getSession();
   const res = await fetch(
-    `${SUPABASE_URL}/functions/v1/${fnName}?id=${encodeURIComponent(id)}`,
+    `${SUPABASE_URL}/functions/v1/${fnName}?id=${encodeURIComponent(id)}&category_id=${encodeURIComponent(cat.id)}`,
     { headers: { Authorization: `Bearer ${session.access_token}` } }
   );
   const payload = await res.json();
@@ -519,6 +518,7 @@ async function openDetail(r, cat) {
     selectedPlatform: (payload.platforms ?? [])[0] ?? null,
   };
   renderDetail();
+  loadTopReferences(cat); // cette consultation vient d'être journalisée côté serveur
 }
 
 function renderDetail() {
@@ -735,38 +735,48 @@ function timeAgo(iso) {
   return `il y a ${Math.floor(diffSec / 86400)} j`;
 }
 
-// ---------- recherches populaires ----------
-async function loadTopSearches(cat) {
+// ---------- références les plus consultées ----------
+async function loadTopReferences(cat) {
   const { data, error } = await sb
-    .from("search_queries")
-    .select("query")
+    .from("reference_views")
+    .select("external_id, title, cover_image_url")
     .eq("category_id", cat.id)
     .order("created_at", { ascending: false })
     .limit(500);
 
   el.topSearches.innerHTML = "";
   if (error || !data.length) {
-    el.topSearches.innerHTML = "<p class='empty'>Pas encore de recherches.</p>";
+    el.topSearches.innerHTML = "<p class='empty'>Pas encore de consultations.</p>";
     return;
   }
 
-  const counts = new Map();
-  data.forEach(({ query }) => {
-    const key = query.trim().toLowerCase();
-    if (!key) return;
-    counts.set(key, (counts.get(key) || 0) + 1);
+  // regroupe par référence (id externe) pour compter les consultations,
+  // en gardant le titre/pochette les plus récents pour cette référence
+  const groups = new Map();
+  data.forEach((row) => {
+    if (!groups.has(row.external_id)) {
+      groups.set(row.external_id, { title: row.title, cover_image_url: row.cover_image_url, count: 0 });
+    }
+    groups.get(row.external_id).count += 1;
   });
 
-  [...counts.entries()]
-    .sort((a, b) => b[1] - a[1])
+  [...groups.entries()]
+    .sort((a, b) => b[1].count - a[1].count)
     .slice(0, 8)
-    .forEach(([query, count]) => {
+    .forEach(([externalId, ref]) => {
       const row = document.createElement("div");
-      row.className = "top-search-row";
+      row.className = "top-reference-row";
       row.innerHTML = `
-        <span class="top-search-term">${escapeHtml(query)}</span>
-        <span class="top-search-count">${count}×</span>
+        <img src="${ref.cover_image_url ?? ""}" alt="" onerror="this.style.visibility='hidden'" />
+        <span class="top-reference-title">${escapeHtml(ref.title)}</span>
+        <span class="top-reference-count">${ref.count}×</span>
       `;
+      row.onclick = () => {
+        const r = cat.slug === "vinyl"
+          ? { discogs_id: externalId, title: ref.title, cover_image: ref.cover_image_url }
+          : { rawg_id: externalId, title: ref.title, cover_image: ref.cover_image_url };
+        openDetail(r, cat);
+      };
       el.topSearches.appendChild(row);
     });
 }
