@@ -1,6 +1,6 @@
 {
-  "name": "Collect Me",
-  "short_name": "Collect Me",
+    "name": "Glanure",
+    "short_name": "Glanure",
   "description": "Suivi de collection : vinyles, DVD, jeux vidéo, livres, timbres, monnaies, affiches...",
   "start_url": "./index.html",
   "scope": "./",
