@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Collect Me</title>
+  <link rel="stylesheet" href="assets/style.css" />
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+</head>
+<body>
+  <header>
+    <h1>Collect Me</h1>
+    <div id="auth-area"></div>
+  </header>
+
+  <nav class="main-nav">
+    <button id="view-catalogue" class="active">Catalogue</button>
+    <button id="view-collection">Ma collection</button>
+  </nav>
+
+  <main>
+    <section id="catalogue-view">
+      <div id="category-tabs"></div>
+      <div id="catalogue-list"></div>
+
+      <form id="add-item-form">
+        <label>
+          Titre
+          <input id="add-item-title" name="title" required />
+        </label>
+        <div id="add-item-fields" style="display:contents"></div>
+        <button type="submit">Ajouter au catalogue</button>
+      </form>
+    </section>
+
+    <section id="collection-view" hidden>
+      <select id="collection-filter"></select>
+      <div id="collection-list"></div>
+    </section>
+  </main>
+
+  <script type="module" src="assets/app.js"></script>
+</body>
+</html>
