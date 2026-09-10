@@ -32,6 +32,9 @@ const el = {
   detailView: document.getElementById("detail-view"),
   detailContent: document.getElementById("detail-content"),
   detailBack: document.getElementById("detail-back"),
+  itemBubble: document.getElementById("item-bubble"),
+  itemBubbleContent: document.getElementById("item-bubble-content"),
+  itemBubbleClose: document.getElementById("item-bubble-close"),
 };
 
 let currentDetail = null;
@@ -205,11 +208,16 @@ function renderItemCard(item, cat) {
     ["owned", "wanted"].forEach((status) => {
       const btn = document.createElement("button");
       btn.textContent = status === "owned" ? "J'ai ça" : "Je le veux";
-      btn.onclick = () => addToCollection(item.id, status);
+      btn.onclick = (e) => {
+        e.stopPropagation();
+        addToCollection(item.id, status);
+      };
       actions.appendChild(btn);
     });
     card.appendChild(actions);
   }
+
+  attachItemBubble(card, item, cat);
 
   return card;
 }
@@ -248,18 +256,26 @@ el.addItemForm.addEventListener("submit", async (e) => {
   [...el.addItemFields.querySelectorAll("[name]")].forEach((inp) => {
     if (inp.value) attributes[inp.name] = inp.value;
   });
+  const title = el.addItemTitle.value.trim();
+  if (!title) return;
 
-  const { error } = await sb.from("items").insert({
-    category_id: cat.id,
-    title: el.addItemTitle.value,
-    attributes,
-    source: "user_submitted",
-    created_by: currentUser.id,
-  });
-  if (error) return alert(error.message);
-
-  el.addItemForm.reset();
-  loadCatalogue();
+  try {
+    const { item, created } = await findOrCreateItem({
+      cat,
+      title,
+      externalIds: {},
+      attributes,
+      coverImageUrl: null,
+      source: "user_submitted",
+    });
+    if (!created) {
+      alert(`« ${item.title} » existe déjà dans le catalogue — pas de doublon créé.`);
+    }
+    el.addItemForm.reset();
+    loadCatalogue();
+  } catch (err) {
+    alert(err.message);
+  }
 });
 
 // ---------- collection ----------
@@ -340,15 +356,22 @@ function renderCollectionGroup(group) {
 
   const minusBtn = document.createElement("button");
   minusBtn.textContent = entryIds.length > 1 ? "− 1 exemplaire" : "Retirer";
-  minusBtn.onclick = () => removeCollectionEntry(entryIds[entryIds.length - 1]);
+  minusBtn.onclick = (e) => {
+    e.stopPropagation();
+    removeCollectionEntry(entryIds[entryIds.length - 1]);
+  };
   actions.appendChild(minusBtn);
 
   const plusBtn = document.createElement("button");
   plusBtn.textContent = "+ 1 doublon";
-  plusBtn.onclick = () => addToCollection(item.id, status);
+  plusBtn.onclick = (e) => {
+    e.stopPropagation();
+    addToCollection(item.id, status);
+  };
   actions.appendChild(plusBtn);
 
   card.appendChild(actions);
+  attachItemBubble(card, item, item.categories);
   return card;
 }
 
@@ -482,11 +505,187 @@ function renderExternalResults(results, cat) {
   });
 }
 
-// ---------- fiche détail (ouverte depuis une suggestion de recherche) ----------
+// ---------- helpers ----------
 function escapeHtml(str) {
   return String(str).replace(/[&<>"']/g, (c) => (
     { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
   ));
+}
+
+// ---------- bulle résumée d'item (clic sur un item -> résumé -> fiche complète) ----------
+function showItemBubble(anchorEl, { title, image, meta, onOpen }) {
+  el.itemBubbleContent.innerHTML = `
+    <img class="item-bubble-cover" src="${image ?? ""}" alt="" onerror="this.style.visibility='hidden'" />
+    <div class="item-bubble-title">${escapeHtml(title ?? "")}</div>
+    ${meta ? `<div class="item-bubble-meta">${escapeHtml(meta)}</div>` : ""}
+    <button type="button" class="item-bubble-open">Voir la fiche complète →</button>
+  `;
+  el.itemBubbleContent.querySelector(".item-bubble-open").onclick = () => {
+    hideItemBubble();
+    onOpen();
+  };
+  positionItemBubble(anchorEl);
+  el.itemBubble.hidden = false;
+}
+
+function positionItemBubble(anchorEl) {
+  const rect = anchorEl.getBoundingClientRect();
+  const bubbleWidth = 240;
+  let left = rect.left + window.scrollX;
+  const maxLeft = window.scrollX + document.documentElement.clientWidth - bubbleWidth - 12;
+  left = Math.min(Math.max(12, left), Math.max(12, maxLeft));
+  const top = rect.bottom + window.scrollY + 8;
+  el.itemBubble.style.left = `${left}px`;
+  el.itemBubble.style.top = `${top}px`;
+}
+
+function hideItemBubble() {
+  el.itemBubble.hidden = true;
+}
+
+el.itemBubbleClose.addEventListener("click", hideItemBubble);
+document.addEventListener("click", (e) => {
+  if (!el.itemBubble.hidden && !el.itemBubble.contains(e.target) && !e.target.closest("[data-bubble-trigger]")) {
+    hideItemBubble();
+  }
+});
+window.addEventListener("scroll", hideItemBubble, true);
+
+// attache le clic "résumé" à un élément représentant un item déjà en base (catalogue,
+// fil communautaire, collection) : il porte forcément un id, des attributs et une catégorie
+function attachItemBubble(node, item, cat) {
+  node.dataset.bubbleTrigger = "true";
+  node.classList.add("clickable");
+  node.addEventListener("click", (e) => {
+    if (e.target.closest(".actions")) return; // ne pas intercepter les boutons d'action
+    e.stopPropagation();
+    const meta = (cat.attribute_schema || [])
+      .map((f) => item.attributes?.[f.key])
+      .filter(Boolean)
+      .slice(0, 3)
+      .join(" · ");
+    showItemBubble(node, {
+      title: item.title,
+      image: item.cover_image_url,
+      meta,
+      onOpen: () => openItemDetail(item, cat),
+    });
+  });
+}
+
+// attache le clic "résumé" à une ligne de référence externe consultée (pas encore
+// forcément dans le catalogue local) : titre + pochette + identifiant externe
+function attachReferenceBubble(node, ref, externalId, cat) {
+  node.dataset.bubbleTrigger = "true";
+  node.addEventListener("click", (e) => {
+    e.stopPropagation();
+    showItemBubble(node, {
+      title: ref.title,
+      image: ref.cover_image_url,
+      meta: `${ref.count}× consulté`,
+      onOpen: () => {
+        const r = cat.slug === "vinyl"
+          ? { discogs_id: externalId, title: ref.title, cover_image: ref.cover_image_url }
+          : { rawg_id: externalId, title: ref.title, cover_image: ref.cover_image_url };
+        openDetail(r, cat);
+      },
+    });
+  });
+}
+
+// point d'entrée générique pour ouvrir la fiche complète d'un item déjà en base :
+// si on a un identifiant externe, on récupère le détail riche (description, versions...)
+// via la edge function ; sinon on affiche la fiche à partir des seules données locales.
+async function openItemDetail(item, cat) {
+  const fnName = CATEGORY_SEARCH_FUNCTIONS[cat.slug];
+  const extId = cat.slug === "vinyl" ? item.external_ids?.discogs_id : item.external_ids?.rawg_id;
+  if (fnName && extId) {
+    const r = cat.slug === "vinyl"
+      ? { discogs_id: extId, title: item.title, cover_image: item.cover_image_url }
+      : { rawg_id: extId, title: item.title, cover_image: item.cover_image_url };
+    return openDetail(r, cat);
+  }
+  renderLocalItemDetail(item, cat);
+}
+
+function renderLocalItemDetail(item, cat) {
+  currentDetail = null;
+  switchView("detail");
+
+  let html = `
+    <div class="detail-header">
+      <img class="detail-cover" src="${item.cover_image_url ?? ""}" alt="" onerror="this.style.visibility='hidden'" />
+      <div>
+        <h2>${escapeHtml(item.title)}</h2>
+      </div>
+    </div>
+    <ul class="attrs">
+      ${(cat.attribute_schema || [])
+        .map((field) => {
+          const val = item.attributes?.[field.key];
+          return val ? `<li>${escapeHtml(field.label)} : ${escapeHtml(String(val))}</li>` : "";
+        })
+        .join("")}
+    </ul>
+  `;
+  el.detailContent.innerHTML = html;
+
+  if (currentUser) {
+    const actions = document.createElement("div");
+    actions.className = "actions detail-actions";
+    const ownedBtn = document.createElement("button");
+    ownedBtn.textContent = "Ajouter à ma collection";
+    ownedBtn.onclick = () => addToCollection(item.id, "owned");
+    const wantedBtn = document.createElement("button");
+    wantedBtn.textContent = "Ajouter à ma wantlist";
+    wantedBtn.onclick = () => addToCollection(item.id, "wanted");
+    actions.append(ownedBtn, wantedBtn);
+    el.detailContent.appendChild(actions);
+  }
+}
+
+// ---------- dédoublonnage du catalogue ----------
+// Avant toute création d'item (import externe ou saisie manuelle), on vérifie s'il
+// n'existe pas déjà : d'abord par identifiant externe (le plus fiable, ex. discogs_id),
+// puis par titre identique à la casse près dans la même catégorie ("Minecraft" ==
+// "minecraft"). Si un item correspond, on le réutilise au lieu d'en créer un doublon.
+async function findOrCreateItem({ cat, title, externalIds, attributes, coverImageUrl, source }) {
+  const extKey = Object.keys(externalIds || {}).find((k) => externalIds[k]);
+  if (extKey) {
+    const { data: existing, error } = await sb
+      .from("items")
+      .select("*")
+      .eq("category_id", cat.id)
+      .eq(`external_ids->>${extKey}`, String(externalIds[extKey]))
+      .maybeSingle();
+    if (error) throw error;
+    if (existing) return { item: existing, created: false };
+  }
+
+  const { data: existingByTitle, error: titleError } = await sb
+    .from("items")
+    .select("*")
+    .eq("category_id", cat.id)
+    .ilike("title", title)
+    .maybeSingle();
+  if (titleError) throw titleError;
+  if (existingByTitle) return { item: existingByTitle, created: false };
+
+  const { data: created, error: insertError } = await sb
+    .from("items")
+    .insert({
+      category_id: cat.id,
+      title,
+      cover_image_url: coverImageUrl ?? null,
+      external_ids: externalIds ?? {},
+      attributes: attributes ?? {},
+      source,
+      created_by: currentUser.id,
+    })
+    .select()
+    .single();
+  if (insertError) throw insertError;
+  return { item: created, created: true };
 }
 
 async function openDetail(r, cat) {
@@ -647,23 +846,21 @@ async function addDetailToCollection(status) {
     coverImageUrl = detail.cover_image ?? null;
   }
 
-  const { data, error } = await sb
-    .from("items")
-    .insert({
-      category_id: cat.id,
+  let item;
+  try {
+    ({ item } = await findOrCreateItem({
+      cat,
       title,
-      cover_image_url: coverImageUrl,
-      external_ids: externalIds,
+      externalIds,
       attributes,
+      coverImageUrl,
       source: "external_api",
-      created_by: currentUser.id,
-    })
-    .select()
-    .single();
+    }));
+  } catch (err) {
+    return alert(err.message);
+  }
 
-  if (error) return alert(error.message);
-
-  await addToCollection(data.id, status);
+  await addToCollection(item.id, status);
   switchView("catalogue");
   selectCategory(cat.slug);
 }
@@ -703,10 +900,10 @@ async function loadCommunityFeed(cat) {
     el.communityFeed.innerHTML = "<p class='empty'>Rien pour l'instant.</p>";
     return;
   }
-  data.forEach((item) => el.communityFeed.appendChild(renderCommunityItem(item)));
+  data.forEach((item) => el.communityFeed.appendChild(renderCommunityItem(item, cat)));
 }
 
-function renderCommunityItem(item) {
+function renderCommunityItem(item, cat) {
   const row = document.createElement("div");
   row.className = "community-item";
   row.innerHTML = `
@@ -716,12 +913,13 @@ function renderCommunityItem(item) {
       <div class="ci-time">${timeAgo(item.created_at)}</div>
     </div>
   `;
+  attachItemBubble(row, item, cat);
   return row;
 }
 
 function prependCommunityItem(item) {
   if (el.communityFeed.querySelector(".empty")) el.communityFeed.innerHTML = "";
-  el.communityFeed.prepend(renderCommunityItem(item));
+  el.communityFeed.prepend(renderCommunityItem(item, currentCategory()));
   while (el.communityFeed.children.length > 8) {
     el.communityFeed.removeChild(el.communityFeed.lastChild);
   }
@@ -771,12 +969,7 @@ async function loadTopReferences(cat) {
         <span class="top-reference-title">${escapeHtml(ref.title)}</span>
         <span class="top-reference-count">${ref.count}×</span>
       `;
-      row.onclick = () => {
-        const r = cat.slug === "vinyl"
-          ? { discogs_id: externalId, title: ref.title, cover_image: ref.cover_image_url }
-          : { rawg_id: externalId, title: ref.title, cover_image: ref.cover_image_url };
-        openDetail(r, cat);
-      };
+      attachReferenceBubble(row, ref, externalId, cat);
       el.topSearches.appendChild(row);
     });
 }
