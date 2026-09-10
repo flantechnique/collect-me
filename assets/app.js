@@ -10,6 +10,7 @@ let currentCatalogueItems = [];
 let catalogueSearchQuery = "";
 let catalogueSortKey = "recent";
 let collectionSearchQuery = "";
+let collectionViewMode = "list"; // "list" | "pokedex"
 
 // ---------- elements ----------
 const el = {
@@ -61,6 +62,15 @@ const el = {
   statsContent: document.getElementById("stats-content"),
   statsExportCsvBtn: document.getElementById("stats-export-csv-btn"),
   statsExportJsonBtn: document.getElementById("stats-export-json-btn"),
+  collectionViewToggle: document.getElementById("collection-view-toggle"),
+  viewFunBtn: document.getElementById("view-fun"),
+  funView: document.getElementById("fun-view"),
+  timelineContent: document.getElementById("timeline-content"),
+  rouletteBtn: document.getElementById("roulette-btn"),
+  rouletteResult: document.getElementById("roulette-result"),
+  badgesContent: document.getElementById("badges-content"),
+  quizStartBtn: document.getElementById("quiz-start-btn"),
+  quizQuestion: document.getElementById("quiz-question"),
 };
 
 let currentDetail = null;
@@ -169,6 +179,25 @@ const BARCODE_LOOKUP = {
   cd: { fn: "discogs-search", param: "barcode" },
   book: { fn: "openlibrary-search", param: "isbn" },
 };
+
+// Attribut qui porte l'année de sortie/publication pour chaque catégorie — utilisé par
+// la frise chronologique et les badges. stamp/coin n'ont pas d'année de "sortie" au même
+// sens (ce sont des objets historiques, pas des œuvres publiées), donc absents ici.
+const YEAR_ATTRIBUTE_BY_CATEGORY = {
+  vinyl: "pressing_year",
+  cd: "pressing_year",
+  video_game: "release_year",
+  book: "year",
+  dvd: "release_year",
+  movie_poster: "release_year",
+};
+
+function itemYear(item) {
+  const key = YEAR_ATTRIBUTE_BY_CATEGORY[item.categories?.slug];
+  const raw = key ? item.attributes?.[key] : null;
+  const year = raw ? parseInt(raw, 10) : null;
+  return Number.isFinite(year) ? year : null;
+}
 
 function creatorIcon(cat) {
   if (cat.slug === "book") return "✍️";
@@ -511,6 +540,11 @@ async function loadMyCollection() {
     groups.get(key).entryIds.push(entry.id);
   });
 
+  if (collectionViewMode === "pokedex") {
+    renderCollectionPokedex([...groups.values()]);
+    return;
+  }
+
   // regroupement par catégorie (trié par type) — masqué quand un filtre de catégorie est actif
   const byCategory = new Map();
   groups.forEach((group) => {
@@ -530,6 +564,29 @@ async function loadMyCollection() {
       }
       catGroups.forEach((group) => el.collectionList.appendChild(renderCollectionGroup(group)));
     });
+}
+
+// ---------- vue "Pokédex" de la collection : grille compacte, possédés en couleur,
+// recherchés en silhouette grisée façon "pas encore capturé" ----------
+function renderCollectionPokedex(groups) {
+  const grid = document.createElement("div");
+  grid.className = "pokedex-grid";
+  groups
+    .filter((g) => g.status !== "for_sale")
+    .sort((a, b) => a.item.title.localeCompare(b.item.title))
+    .forEach((group) => {
+      const { item, status } = group;
+      const card = document.createElement("div");
+      card.className = `pokedex-card ${status}`;
+      card.innerHTML = `
+        <img src="${item.cover_image_url ?? ""}" alt="" onerror="this.style.visibility='hidden'" />
+        <span class="pokedex-badge">${status === "owned" ? "✅" : "❔"}</span>
+        <div class="pokedex-title">${escapeHtml(item.title)}</div>
+      `;
+      attachItemBubble(card, item, item.categories);
+      grid.appendChild(card);
+    });
+  el.collectionList.appendChild(grid);
 }
 
 function renderCollectionGroup(group) {
@@ -652,6 +709,12 @@ el.collectionSearch.addEventListener("input", () => {
   collectionSearchQuery = el.collectionSearch.value.trim().toLowerCase();
   loadMyCollection();
 });
+el.collectionViewToggle.addEventListener("click", () => {
+  collectionViewMode = collectionViewMode === "pokedex" ? "list" : "pokedex";
+  el.collectionViewToggle.classList.toggle("active", collectionViewMode === "pokedex");
+  el.collectionViewToggle.textContent = collectionViewMode === "pokedex" ? "📋 Vue liste" : "🎴 Vue Pokédex";
+  loadMyCollection();
+});
 
 // ---------- view switching ----------
 function goHome() {
@@ -676,6 +739,10 @@ el.viewStatsBtn.addEventListener("click", () => {
   unsubscribeCommunityFeed();
   switchView("stats");
 });
+el.viewFunBtn.addEventListener("click", () => {
+  unsubscribeCommunityFeed();
+  switchView("fun");
+});
 
 el.detailBack.addEventListener("click", () => switchView("catalogue"));
 el.creatorBack.addEventListener("click", () => switchView("catalogue"));
@@ -685,13 +752,16 @@ function switchView(view) {
   el.catalogueView.hidden = view !== "catalogue";
   el.collectionView.hidden = view !== "collection";
   el.statsView.hidden = view !== "stats";
+  el.funView.hidden = view !== "fun";
   el.detailView.hidden = view !== "detail";
   el.creatorView.hidden = view !== "creator";
   el.viewHomeBtn.classList.toggle("active", view === "home");
   el.viewCollectionBtn.classList.toggle("active", view === "collection");
   el.viewStatsBtn.classList.toggle("active", view === "stats");
+  el.viewFunBtn.classList.toggle("active", view === "fun");
   if (view === "collection") loadMyCollection();
   if (view === "stats") loadStats();
+  if (view === "fun") loadFunView();
 }
 
 // ---------- recherche externe (Discogs, RAWG...) — dropdown en live ----------
@@ -1010,26 +1080,33 @@ async function importCsv(file) {
   if (!el.collectionView.hidden) loadMyCollection();
 }
 
-// ---------- statistiques ----------
-let statsEntries = [];
+// ---------- récupération partagée de la collection (stats, badges, roulette, quiz, frise) ----------
+let collectionEntriesCache = [];
 
-async function loadStats() {
-  if (!currentUser) {
-    el.statsContent.innerHTML = "<p class='empty'>Connecte-toi pour voir tes statistiques.</p>";
-    return;
-  }
-  el.statsContent.innerHTML = "<p class='empty'>Chargement...</p>";
+async function fetchCollectionEntries() {
+  if (!currentUser) return [];
   const { data, error } = await sb
     .from("collection_entries")
     .select("*, items(*, categories(*))")
     .eq("user_id", currentUser.id)
     .order("created_at", { ascending: false });
   if (error) {
-    el.statsContent.innerHTML = `<p class='empty'>Erreur : ${error.message}</p>`;
+    console.error(error);
+    return [];
+  }
+  collectionEntriesCache = data ?? [];
+  return collectionEntriesCache;
+}
+
+// ---------- statistiques ----------
+async function loadStats() {
+  if (!currentUser) {
+    el.statsContent.innerHTML = "<p class='empty'>Connecte-toi pour voir tes statistiques.</p>";
     return;
   }
-  statsEntries = data ?? [];
-  renderStats(statsEntries);
+  el.statsContent.innerHTML = "<p class='empty'>Chargement...</p>";
+  const entries = await fetchCollectionEntries();
+  renderStats(entries);
 }
 
 function renderStats(entries) {
@@ -1157,9 +1234,9 @@ function csvEscape(v) {
 }
 
 function exportCollectionCsv() {
-  if (!statsEntries.length) return;
+  if (!collectionEntriesCache.length) return;
   const columns = ["categorie", "titre", "statut", "etat", "prix_paye", "date_acquisition", "notes", "attributs"];
-  const rows = statsEntries.map((e) => [
+  const rows = collectionEntriesCache.map((e) => [
     e.items.categories.name,
     e.items.title,
     statusLabel(e.status),
@@ -1174,8 +1251,8 @@ function exportCollectionCsv() {
 }
 
 function exportCollectionJson() {
-  if (!statsEntries.length) return;
-  const data = statsEntries.map((e) => ({
+  if (!collectionEntriesCache.length) return;
+  const data = collectionEntriesCache.map((e) => ({
     categorie: e.items.categories.slug,
     titre: e.items.title,
     statut: e.status,
@@ -1187,6 +1264,249 @@ function exportCollectionJson() {
     attributs: e.items.attributes,
   }));
   triggerDownload(JSON.stringify(data, null, 2), "ma-collection.json", "application/json;charset=utf-8;");
+}
+
+// ---------- "Découvrir" : frise chronologique, roulette, badges, quiz tracklist ----------
+async function loadFunView() {
+  if (!currentUser) {
+    el.timelineContent.innerHTML = "<p class='empty'>Connecte-toi pour découvrir ta collection.</p>";
+    el.badgesContent.innerHTML = "";
+    el.rouletteResult.innerHTML = "";
+    el.quizQuestion.innerHTML = "";
+    return;
+  }
+  el.timelineContent.innerHTML = "<p class='empty'>Chargement...</p>";
+  const entries = await fetchCollectionEntries();
+  renderTimeline(entries);
+  renderBadges(entries);
+  el.rouletteResult.innerHTML = "";
+  el.quizQuestion.innerHTML = "";
+}
+
+// ---- frise chronologique : les items possédés, regroupés par décennie de sortie ----
+function renderTimeline(entries) {
+  el.timelineContent.innerHTML = "";
+  const owned = entries.filter((e) => e.status === "owned");
+  const uniqueItems = new Map();
+  owned.forEach((e) => {
+    if (!uniqueItems.has(e.item_id)) uniqueItems.set(e.item_id, e.items);
+  });
+
+  const withYear = [...uniqueItems.values()]
+    .map((item) => ({ item, year: itemYear(item) }))
+    .filter((x) => x.year);
+
+  if (!withYear.length) {
+    el.timelineContent.innerHTML =
+      "<p class='empty'>Pas encore assez d'années de sortie renseignées pour tracer une frise.</p>";
+    return;
+  }
+
+  const byDecade = new Map();
+  withYear.forEach(({ item, year }) => {
+    const decade = `${Math.floor(year / 10) * 10}s`;
+    if (!byDecade.has(decade)) byDecade.set(decade, []);
+    byDecade.get(decade).push({ item, year });
+  });
+
+  const track = document.createElement("div");
+  track.className = "timeline-track";
+  [...byDecade.entries()]
+    .sort(([a], [b]) => parseInt(a, 10) - parseInt(b, 10))
+    .forEach(([decade, decadeItems]) => {
+      const col = document.createElement("div");
+      col.className = "timeline-decade";
+      col.innerHTML = `<h4>${decade}</h4>`;
+      const list = document.createElement("div");
+      list.className = "timeline-items";
+      decadeItems
+        .sort((a, b) => a.year - b.year)
+        .forEach(({ item, year }) => {
+          const row = document.createElement("div");
+          row.className = "timeline-item";
+          row.innerHTML = `
+            <img src="${item.cover_image_url ?? ""}" alt="" onerror="this.style.visibility='hidden'" />
+            <span>${escapeHtml(item.title)} (${year})</span>
+          `;
+          attachItemBubble(row, item, item.categories);
+          list.appendChild(row);
+        });
+      col.appendChild(list);
+      track.appendChild(col);
+    });
+  el.timelineContent.appendChild(track);
+}
+
+// ---- roulette "quoi faire ce soir ?" : tire un item possédé au hasard, façon machine à sous ----
+const ROULETTE_EXCLUDED_CATEGORIES = ["stamp", "coin"];
+
+el.rouletteBtn.addEventListener("click", spinRoulette);
+
+async function spinRoulette() {
+  const entries = collectionEntriesCache.length ? collectionEntriesCache : await fetchCollectionEntries();
+  const candidates = entries.filter(
+    (e) => e.status === "owned" && !ROULETTE_EXCLUDED_CATEGORIES.includes(e.items.categories.slug)
+  );
+  if (!candidates.length) {
+    el.rouletteResult.innerHTML =
+      "<p class='empty'>Pas encore d'item possédé à te proposer — ajoute des choses à ta collection !</p>";
+    return;
+  }
+
+  const card = document.createElement("div");
+  card.className = "roulette-result-card spinning";
+  card.innerHTML = `<img src="" alt="" /><div class="pokedex-title">Tirage en cours...</div>`;
+  el.rouletteResult.innerHTML = "";
+  el.rouletteResult.appendChild(card);
+  const img = card.querySelector("img");
+
+  let ticks = 0;
+  const maxTicks = 12;
+  const timer = setInterval(() => {
+    const pick = candidates[Math.floor(Math.random() * candidates.length)];
+    img.src = pick.items.cover_image_url ?? "";
+    ticks++;
+    if (ticks >= maxTicks) {
+      clearInterval(timer);
+      finalizeRoulette(card, pick);
+    }
+  }, 120);
+}
+
+function finalizeRoulette(card, entry) {
+  const item = entry.items;
+  card.classList.remove("spinning");
+  card.innerHTML = `
+    <img src="${item.cover_image_url ?? ""}" alt="" onerror="this.style.visibility='hidden'" />
+    <div>
+      <div class="pokedex-title">${item.categories.icon ?? ""} ${escapeHtml(item.title)}</div>
+      <p class="empty" style="margin:0.3rem 0 0;">${escapeHtml(item.categories.name)}</p>
+    </div>
+  `;
+  attachItemBubble(card, item, item.categories);
+}
+
+// ---- badges : quelques paliers calculés côté client à partir de la collection ----
+const BADGE_DEFS = [
+  { icon: "🥇", label: "Premier item", check: (s) => s.totalOwned >= 1 },
+  { icon: "🔟", label: "10 exemplaires", check: (s) => s.totalOwned >= 10 },
+  { icon: "💯", label: "50 exemplaires", check: (s) => s.totalOwned >= 50 },
+  { icon: "🏛️", label: "100 exemplaires", check: (s) => s.totalOwned >= 100 },
+  { icon: "🎯", label: "5 catégories différentes", check: (s) => s.categoriesOwned >= 5 },
+  { icon: "🌈", label: "Toutes les catégories", check: (s) => s.categoriesTotal > 0 && s.categoriesOwned >= s.categoriesTotal },
+  { icon: "🌟", label: "Une wantlist", check: (s) => s.totalWanted >= 1 },
+  { icon: "💰", label: "Plus de 500 € suivis", check: (s) => s.totalSpent >= 500 },
+  { icon: "📅", label: "Une décennie couverte", check: (s) => s.yearSpread >= 10 },
+];
+
+function computeBadgeStats(entries) {
+  const owned = entries.filter((e) => e.status === "owned");
+  const wanted = entries.filter((e) => e.status === "wanted");
+  const categoriesOwned = new Set(owned.map((e) => e.items.categories.slug)).size;
+  const totalSpent = owned.reduce((sum, e) => sum + (e.price_paid ? Number(e.price_paid) : 0), 0);
+  const years = owned.map((e) => itemYear(e.items)).filter(Boolean);
+  const yearSpread = years.length ? Math.max(...years) - Math.min(...years) : 0;
+  return {
+    totalOwned: owned.length,
+    totalWanted: wanted.length,
+    categoriesOwned,
+    categoriesTotal: categories.length,
+    totalSpent,
+    yearSpread,
+  };
+}
+
+function renderBadges(entries) {
+  const stats = computeBadgeStats(entries);
+  el.badgesContent.innerHTML = "";
+  BADGE_DEFS.forEach((badge) => {
+    const unlocked = badge.check(stats);
+    const card = document.createElement("div");
+    card.className = `badge-card ${unlocked ? "unlocked" : ""}`;
+    card.innerHTML = `
+      <div class="badge-icon">${badge.icon}</div>
+      <div class="badge-label">${badge.label}</div>
+    `;
+    el.badgesContent.appendChild(card);
+  });
+}
+
+// ---- quiz tracklist : devine l'album vinyle/CD possédé à partir de 3 titres de pistes ----
+el.quizStartBtn.addEventListener("click", startQuiz);
+
+async function startQuiz() {
+  const entries = collectionEntriesCache.length ? collectionEntriesCache : await fetchCollectionEntries();
+  const discogsOwned = entries.filter(
+    (e) =>
+      e.status === "owned" &&
+      DISCOGS_CATEGORIES.includes(e.items.categories.slug) &&
+      e.items.external_ids?.discogs_id
+  );
+  const uniqueByItem = [...new Map(discogsOwned.map((e) => [e.item_id, e])).values()];
+
+  if (uniqueByItem.length < 2) {
+    el.quizQuestion.innerHTML =
+      "<p class='empty'>Il te faut au moins 2 vinyles/CD possédés pour lancer le quiz.</p>";
+    return;
+  }
+
+  el.quizQuestion.innerHTML = "<p class='empty'>Préparation de la question...</p>";
+
+  const target = uniqueByItem[Math.floor(Math.random() * uniqueByItem.length)];
+  const { data: { session } } = await sb.auth.getSession();
+  const res = await fetch(
+    `${SUPABASE_URL}/functions/v1/discogs-search?id=${encodeURIComponent(target.items.external_ids.discogs_id)}`,
+    { headers: { Authorization: `Bearer ${session.access_token}` } }
+  );
+  const payload = await res.json();
+  const tracklist = payload.detail?.tracklist ?? [];
+  if (!res.ok || tracklist.length < 2) {
+    el.quizQuestion.innerHTML = "<p class='empty'>Pas assez d'informations de tracklist pour cet album, réessaie.</p>";
+    return;
+  }
+
+  const sampleTracks = [...tracklist].sort(() => Math.random() - 0.5).slice(0, 3);
+  const distractors = uniqueByItem
+    .filter((e) => e.item_id !== target.item_id)
+    .sort(() => Math.random() - 0.5)
+    .slice(0, 3)
+    .map((e) => e.items.title);
+  const options = [...distractors, target.items.title].sort(() => Math.random() - 0.5);
+
+  const wrapper = document.createElement("div");
+  wrapper.innerHTML = `
+    <p>Quel album regroupe ces titres ?</p>
+    <ul class="quiz-tracks">${sampleTracks.map((t) => `<li>🎵 ${escapeHtml(t.title)}</li>`).join("")}</ul>
+    <div class="quiz-options"></div>
+  `;
+  const optionsWrap = wrapper.querySelector(".quiz-options");
+  options.forEach((title) => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "quiz-option-btn";
+    btn.textContent = title;
+    btn.onclick = () => {
+      [...optionsWrap.children].forEach((b) => { b.disabled = true; });
+      if (title === target.items.title) {
+        btn.classList.add("correct");
+      } else {
+        btn.classList.add("incorrect");
+        [...optionsWrap.children]
+          .find((b) => b.textContent === target.items.title)
+          ?.classList.add("correct");
+      }
+      const nextBtn = document.createElement("button");
+      nextBtn.type = "button";
+      nextBtn.className = "quiz-next-btn";
+      nextBtn.textContent = "Question suivante";
+      nextBtn.onclick = startQuiz;
+      wrapper.appendChild(nextBtn);
+    };
+    optionsWrap.appendChild(btn);
+  });
+
+  el.quizQuestion.innerHTML = "";
+  el.quizQuestion.appendChild(wrapper);
 }
 
 // ---------- helpers ----------

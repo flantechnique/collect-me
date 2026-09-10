@@ -21,6 +21,7 @@
     <button id="view-home" class="active">Accueil</button>
     <button id="view-collection">Ma collection</button>
     <button id="view-stats">Statistiques</button>
+    <button id="view-fun">Découvrir</button>
   </nav>
 
   <main>
@@ -89,6 +90,7 @@
       <div class="catalogue-toolbar">
         <input id="collection-search" type="text" placeholder="Rechercher dans ma collection..." autocomplete="off" />
         <select id="collection-filter"></select>
+        <button id="collection-view-toggle" type="button">🎴 Vue Pokédex</button>
       </div>
       <div id="collection-list"></div>
     </section>
@@ -99,6 +101,32 @@
       <div class="stats-export-row">
         <button id="stats-export-csv-btn" type="button">⬇️ Exporter en CSV</button>
         <button id="stats-export-json-btn" type="button">⬇️ Exporter en JSON</button>
+      </div>
+    </section>
+
+    <section id="fun-view" hidden>
+      <h2>Découvrir ma collection</h2>
+
+      <div class="stats-section">
+        <h3>🕰️ Frise chronologique</h3>
+        <div id="timeline-content"></div>
+      </div>
+
+      <div class="stats-section">
+        <h3>🎲 Quoi faire ce soir ?</h3>
+        <button id="roulette-btn" type="button">Lancer la roulette</button>
+        <div id="roulette-result"></div>
+      </div>
+
+      <div class="stats-section">
+        <h3>🏆 Badges</h3>
+        <div id="badges-content" class="badges-grid"></div>
+      </div>
+
+      <div class="stats-section">
+        <h3>🎧 Quiz tracklist</h3>
+        <button id="quiz-start-btn" type="button">Lancer le quiz</button>
+        <div id="quiz-question"></div>
       </div>
     </section>
 
