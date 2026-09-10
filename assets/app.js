@@ -10,9 +10,12 @@ let activeCategorySlug = null;
 // ---------- elements ----------
 const el = {
   authArea: document.getElementById("auth-area"),
-  categoryTabs: document.getElementById("category-tabs"),
-  viewCatalogueBtn: document.getElementById("view-catalogue"),
+  viewHomeBtn: document.getElementById("view-home"),
   viewCollectionBtn: document.getElementById("view-collection"),
+  homeView: document.getElementById("home-view"),
+  homeCategories: document.getElementById("home-categories"),
+  backToHomeBtn: document.getElementById("back-to-home"),
+  catalogueTitle: document.getElementById("catalogue-title"),
   catalogueView: document.getElementById("catalogue-view"),
   collectionView: document.getElementById("collection-view"),
   catalogueList: document.getElementById("catalogue-list"),
@@ -24,6 +27,8 @@ const el = {
   externalSearch: document.getElementById("external-search"),
   externalSearchInput: document.getElementById("external-search-input"),
   externalSearchResults: document.getElementById("external-search-results"),
+  communityFeed: document.getElementById("community-feed"),
+  topSearches: document.getElementById("top-searches"),
   detailView: document.getElementById("detail-view"),
   detailContent: document.getElementById("detail-content"),
   detailBack: document.getElementById("detail-back"),
@@ -100,23 +105,35 @@ async function loadCategories() {
   const { data, error } = await sb.from("categories").select("*").order("name");
   if (error) return console.error(error);
   categories = data;
-  el.categoryTabs.innerHTML = "";
+
   el.collectionFilter.innerHTML = '<option value="">Toutes les catégories</option>';
-
   categories.forEach((cat) => {
-    const tab = document.createElement("button");
-    tab.className = "tab";
-    tab.textContent = `${cat.icon ?? ""} ${cat.name}`.trim();
-    tab.onclick = () => selectCategory(cat.slug);
-    el.categoryTabs.appendChild(tab);
-
     const opt = document.createElement("option");
     opt.value = cat.slug;
     opt.textContent = cat.name;
     el.collectionFilter.appendChild(opt);
   });
 
-  if (categories.length) selectCategory(categories[0].slug);
+  renderHome();
+  switchView("home");
+}
+
+function renderHome() {
+  el.homeCategories.innerHTML = "";
+  categories.forEach((cat) => {
+    const card = document.createElement("button");
+    card.type = "button";
+    card.className = "home-category-card";
+    card.innerHTML = `
+      <span class="home-category-icon">${cat.icon ?? ""}</span>
+      <span class="home-category-name">${escapeHtml(cat.name)}</span>
+    `;
+    card.onclick = () => {
+      selectCategory(cat.slug);
+      switchView("catalogue");
+    };
+    el.homeCategories.appendChild(card);
+  });
 }
 
 function currentCategory() {
@@ -125,9 +142,10 @@ function currentCategory() {
 
 function selectCategory(slug) {
   activeCategorySlug = slug;
-  [...el.categoryTabs.children].forEach((btn, i) => {
-    btn.classList.toggle("active", categories[i].slug === slug);
-  });
+  const cat = currentCategory();
+
+  el.catalogueTitle.textContent = `${cat.icon ?? ""} ${cat.name}`.trim();
+
   renderAddItemFields();
   loadCatalogue();
 
@@ -136,6 +154,10 @@ function selectCategory(slug) {
   el.externalSearchResults.hidden = true;
   el.externalSearchResults.innerHTML = "";
   el.externalSearchInput.value = "";
+
+  loadCommunityFeed(cat);
+  subscribeCommunityFeed(cat);
+  loadTopSearches(cat);
 }
 
 // ---------- catalogue ----------
@@ -343,16 +365,27 @@ function statusLabel(status) {
 el.collectionFilter.addEventListener("change", loadMyCollection);
 
 // ---------- view switching ----------
-el.viewCatalogueBtn.addEventListener("click", () => switchView("catalogue"));
-el.viewCollectionBtn.addEventListener("click", () => switchView("collection"));
+el.viewHomeBtn.addEventListener("click", () => {
+  unsubscribeCommunityFeed();
+  switchView("home");
+});
+el.backToHomeBtn.addEventListener("click", () => {
+  unsubscribeCommunityFeed();
+  switchView("home");
+});
+el.viewCollectionBtn.addEventListener("click", () => {
+  unsubscribeCommunityFeed();
+  switchView("collection");
+});
 
 el.detailBack.addEventListener("click", () => switchView("catalogue"));
 
 function switchView(view) {
+  el.homeView.hidden = view !== "home";
   el.catalogueView.hidden = view !== "catalogue";
   el.collectionView.hidden = view !== "collection";
   el.detailView.hidden = view !== "detail";
-  el.viewCatalogueBtn.classList.toggle("active", view === "catalogue");
+  el.viewHomeBtn.classList.toggle("active", view === "home");
   el.viewCollectionBtn.classList.toggle("active", view === "collection");
   if (view === "collection") loadMyCollection();
 }
@@ -398,7 +431,7 @@ async function searchExternal() {
   el.externalSearchResults.innerHTML = "<p class='empty'>Recherche...</p>";
 
   const res = await fetch(
-    `${SUPABASE_URL}/functions/v1/${fnName}?q=${encodeURIComponent(query)}`,
+    `${SUPABASE_URL}/functions/v1/${fnName}?q=${encodeURIComponent(query)}&category_id=${encodeURIComponent(cat.id)}`,
     { headers: { Authorization: `Bearer ${session.access_token}` } }
   );
   const payload = await res.json();
@@ -411,6 +444,7 @@ async function searchExternal() {
     return;
   }
   renderExternalResults(payload.results ?? [], cat);
+  loadTopSearches(cat); // la recherche vient d'être journalisée côté serveur
 }
 
 function renderExternalResults(results, cat) {
@@ -632,6 +666,109 @@ async function addDetailToCollection(status) {
   await addToCollection(data.id, status);
   switchView("catalogue");
   selectCategory(cat.slug);
+}
+
+// ---------- fil communautaire temps réel ----------
+let realtimeChannel = null;
+
+function unsubscribeCommunityFeed() {
+  if (realtimeChannel) {
+    sb.removeChannel(realtimeChannel);
+    realtimeChannel = null;
+  }
+}
+
+function subscribeCommunityFeed(cat) {
+  unsubscribeCommunityFeed();
+  realtimeChannel = sb
+    .channel(`items-inserts-${cat.slug}`)
+    .on(
+      "postgres_changes",
+      { event: "INSERT", schema: "public", table: "items", filter: `category_id=eq.${cat.id}` },
+      (payload) => prependCommunityItem(payload.new)
+    )
+    .subscribe();
+}
+
+async function loadCommunityFeed(cat) {
+  const { data, error } = await sb
+    .from("items")
+    .select("*")
+    .eq("category_id", cat.id)
+    .order("created_at", { ascending: false })
+    .limit(8);
+
+  el.communityFeed.innerHTML = "";
+  if (error || !data.length) {
+    el.communityFeed.innerHTML = "<p class='empty'>Rien pour l'instant.</p>";
+    return;
+  }
+  data.forEach((item) => el.communityFeed.appendChild(renderCommunityItem(item)));
+}
+
+function renderCommunityItem(item) {
+  const row = document.createElement("div");
+  row.className = "community-item";
+  row.innerHTML = `
+    <img src="${item.cover_image_url ?? ""}" alt="" onerror="this.style.visibility='hidden'" />
+    <div>
+      <div class="ci-title">${escapeHtml(item.title)}</div>
+      <div class="ci-time">${timeAgo(item.created_at)}</div>
+    </div>
+  `;
+  return row;
+}
+
+function prependCommunityItem(item) {
+  if (el.communityFeed.querySelector(".empty")) el.communityFeed.innerHTML = "";
+  el.communityFeed.prepend(renderCommunityItem(item));
+  while (el.communityFeed.children.length > 8) {
+    el.communityFeed.removeChild(el.communityFeed.lastChild);
+  }
+}
+
+function timeAgo(iso) {
+  const diffSec = (Date.now() - new Date(iso).getTime()) / 1000;
+  if (diffSec < 60) return "à l'instant";
+  if (diffSec < 3600) return `il y a ${Math.floor(diffSec / 60)} min`;
+  if (diffSec < 86400) return `il y a ${Math.floor(diffSec / 3600)} h`;
+  return `il y a ${Math.floor(diffSec / 86400)} j`;
+}
+
+// ---------- recherches populaires ----------
+async function loadTopSearches(cat) {
+  const { data, error } = await sb
+    .from("search_queries")
+    .select("query")
+    .eq("category_id", cat.id)
+    .order("created_at", { ascending: false })
+    .limit(500);
+
+  el.topSearches.innerHTML = "";
+  if (error || !data.length) {
+    el.topSearches.innerHTML = "<p class='empty'>Pas encore de recherches.</p>";
+    return;
+  }
+
+  const counts = new Map();
+  data.forEach(({ query }) => {
+    const key = query.trim().toLowerCase();
+    if (!key) return;
+    counts.set(key, (counts.get(key) || 0) + 1);
+  });
+
+  [...counts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 8)
+    .forEach(([query, count]) => {
+      const row = document.createElement("div");
+      row.className = "top-search-row";
+      row.innerHTML = `
+        <span class="top-search-term">${escapeHtml(query)}</span>
+        <span class="top-search-count">${count}×</span>
+      `;
+      el.topSearches.appendChild(row);
+    });
 }
 
 // ---------- boot ----------

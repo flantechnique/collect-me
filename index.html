@@ -17,13 +17,19 @@
   </header>
 
   <nav class="main-nav">
-    <button id="view-catalogue" class="active">Catalogue</button>
+    <button id="view-home" class="active">Accueil</button>
     <button id="view-collection">Ma collection</button>
   </nav>
 
   <main>
-    <section id="catalogue-view">
-      <div id="category-tabs"></div>
+    <section id="home-view">
+      <h2>Que veux-tu consulter aujourd'hui ?</h2>
+      <div id="home-categories"></div>
+    </section>
+
+    <section id="catalogue-view" hidden>
+      <button id="back-to-home" type="button" class="tab">← Toutes les collections</button>
+      <h2 id="catalogue-title"></h2>
 
       <div id="external-search" hidden>
         <div class="search-wrapper">
@@ -32,16 +38,31 @@
         </div>
       </div>
 
-      <div id="catalogue-list"></div>
+      <div class="catalogue-columns">
+        <div class="catalogue-main">
+          <div id="catalogue-list"></div>
 
-      <form id="add-item-form">
-        <label>
-          Titre
-          <input id="add-item-title" name="title" required />
-        </label>
-        <div id="add-item-fields" style="display:contents"></div>
-        <button type="submit">Ajouter au catalogue</button>
-      </form>
+          <form id="add-item-form">
+            <label>
+              Titre
+              <input id="add-item-title" name="title" required />
+            </label>
+            <div id="add-item-fields" style="display:contents"></div>
+            <button type="submit">Ajouter au catalogue</button>
+          </form>
+        </div>
+
+        <aside class="catalogue-side">
+          <div class="side-panel">
+            <h3>Nouveaux ajouts de la communauté</h3>
+            <div id="community-feed" class="scrolling-feed"></div>
+          </div>
+          <div class="side-panel">
+            <h3>Recherches populaires</h3>
+            <div id="top-searches"></div>
+          </div>
+        </aside>
+      </div>
     </section>
 
     <section id="collection-view" hidden>
