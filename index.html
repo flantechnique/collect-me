@@ -131,6 +131,11 @@
 
       <p class="empty fun-account-hint">Pseudo, photo de profil, bio et vitrine publique se gèrent maintenant depuis <button id="fun-account-link" type="button" class="link-btn">Mon compte</button>.</p>
 
+      <div id="on-this-day-section" class="stats-section" hidden>
+        <h3>📅 Ce jour-là</h3>
+        <div id="on-this-day-content"></div>
+      </div>
+
       <div class="stats-section">
         <h3>🔔 Nouveautés de mes créateurs suivis</h3>
         <div id="digest-content"></div>
@@ -155,6 +160,12 @@
       <div class="stats-section">
         <h3>💡 Si tu as aimé...</h3>
         <div id="recommendations-content"></div>
+      </div>
+
+      <div class="stats-section">
+        <h3>📊 Mon année en collection</h3>
+        <button id="wrapped-generate-btn" type="button">Générer mon récap</button>
+        <div id="wrapped-content"></div>
       </div>
 
       <div class="stats-section">
@@ -230,6 +241,10 @@
           <label class="full-width">
             Bio
             <textarea id="account-bio-input" maxlength="280" placeholder="Quelques mots sur toi et ta collection..."></textarea>
+          </label>
+          <label class="account-theme-label">
+            Couleur d'accent de mon profil public
+            <input id="account-theme-color-input" type="color" value="#c96a3f" />
           </label>
           <label class="showcase-toggle" for="account-showcase-checkbox">
             <input type="checkbox" id="account-showcase-checkbox" />

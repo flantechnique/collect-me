@@ -1143,6 +1143,60 @@ form#add-item-form button[type="submit"]:hover { background: var(--accent-hover)
 
 .activity-row .activity-date { font-size: 0.75rem; color: var(--muted); }
 
+.wrapped-card {
+  background: linear-gradient(135deg, var(--accent) 0%, var(--accent-hover) 100%);
+  color: #fff8f0;
+  border-radius: 16px;
+  padding: 1.5rem;
+  margin-top: 1rem;
+}
+
+.wrapped-card h4 {
+  margin: 0 0 1rem;
+  font-family: "Fraunces", serif;
+  font-size: 1.3rem;
+}
+
+.wrapped-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.wrapped-stat-value { font-size: 1.6rem; font-weight: 800; font-family: "Fraunces", serif; }
+.wrapped-stat-label { font-size: 0.78rem; opacity: 0.9; }
+
+.wrapped-copy-btn {
+  background: rgba(255, 255, 255, 0.2);
+  border: 1px solid rgba(255, 255, 255, 0.5);
+  color: #fff8f0;
+  padding: 0.45rem 1rem;
+  border-radius: 999px;
+  cursor: pointer;
+  font-family: "Nunito", sans-serif;
+  font-weight: 700;
+  font-size: 0.82rem;
+}
+
+.wrapped-copy-btn:hover { background: rgba(255, 255, 255, 0.32); }
+
+.on-this-day-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 0.5rem;
+}
+
+.on-this-day-row img {
+  width: 44px;
+  height: 44px;
+  object-fit: cover;
+  border-radius: 8px;
+  background: var(--bg-soft);
+  flex-shrink: 0;
+}
+
 .pokedex-badge {
   position: absolute;
   top: 0.5rem;
@@ -1526,6 +1580,15 @@ form#add-item-form button[type="submit"]:hover { background: var(--accent-hover)
 }
 
 #account-profile-form textarea { min-height: 70px; resize: vertical; }
+
+.account-theme-label { flex: 0 0 auto !important; min-width: 0 !important; }
+
+#account-theme-color-input {
+  padding: 0.2rem !important;
+  width: 60px;
+  height: 38px;
+  cursor: pointer;
+}
 #account-profile-form .actions,
 #account-password-form .actions,
 #account-email-form .actions,

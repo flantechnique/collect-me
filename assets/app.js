@@ -84,6 +84,10 @@ const el = {
   compareResult: document.getElementById("compare-result"),
   digestContent: document.getElementById("digest-content"),
   wantlistAlertsContent: document.getElementById("wantlist-alerts-content"),
+  onThisDaySection: document.getElementById("on-this-day-section"),
+  onThisDayContent: document.getElementById("on-this-day-content"),
+  wrappedGenerateBtn: document.getElementById("wrapped-generate-btn"),
+  wrappedContent: document.getElementById("wrapped-content"),
   creatorFollowRow: document.getElementById("creator-follow-row"),
   timelineContent: document.getElementById("timeline-content"),
   rouletteBtn: document.getElementById("roulette-btn"),
@@ -125,6 +129,7 @@ const el = {
   accountUsernameStatus: document.getElementById("account-username-status"),
   accountDisplayNameInput: document.getElementById("account-display-name-input"),
   accountBioInput: document.getElementById("account-bio-input"),
+  accountThemeColorInput: document.getElementById("account-theme-color-input"),
   accountShowcaseCheckbox: document.getElementById("account-showcase-checkbox"),
   accountLinkRow: document.getElementById("account-link-row"),
   accountLinkInput: document.getElementById("account-link-input"),
@@ -1779,6 +1784,7 @@ async function loadFunView() {
   const entries = await fetchCollectionEntries();
   loadCreatorDigest(entries);
   renderWantlistAlerts(entries);
+  renderOnThisDay(entries);
   renderRecommendations(entries);
   renderTimeline(entries);
   renderBadges(entries);
@@ -1786,6 +1792,7 @@ async function loadFunView() {
   el.quizQuestion.innerHTML = "";
   el.compareResult.innerHTML = "";
   el.compareSummary.innerHTML = "";
+  el.wrappedContent.innerHTML = "";
 }
 
 el.funAccountLink.addEventListener("click", () => openAccountView());
@@ -1930,6 +1937,92 @@ async function renderWantlistAlerts(entries) {
   el.wantlistAlertsContent.innerHTML = "";
   el.wantlistAlertsContent.appendChild(grid);
 }
+
+// ---- "Ce jour-là" : les items ajoutés à cette même date (jour+mois) les années précédentes
+// — priorité à la date d'acquisition renseignée par l'utilisateur, sinon la date d'ajout à
+// l'app (created_at, toujours renseignée) ----
+function renderOnThisDay(entries) {
+  const today = new Date();
+  const todayMonth = today.getMonth();
+  const todayDate = today.getDate();
+
+  const matches = entries
+    .map((e) => {
+      const raw = e.acquired_at || e.created_at;
+      if (!raw) return null;
+      const d = new Date(raw);
+      if (d.getMonth() !== todayMonth || d.getDate() !== todayDate || d.getFullYear() === today.getFullYear()) return null;
+      return { entry: e, date: d };
+    })
+    .filter(Boolean)
+    .sort((a, b) => b.date.getFullYear() - a.date.getFullYear());
+
+  if (!matches.length) {
+    el.onThisDaySection.hidden = true;
+    return;
+  }
+
+  el.onThisDaySection.hidden = false;
+  el.onThisDayContent.innerHTML = "";
+  matches.forEach(({ entry, date }) => {
+    const yearsAgo = today.getFullYear() - date.getFullYear();
+    const row = document.createElement("div");
+    row.className = "on-this-day-row";
+    row.innerHTML = `
+      <img src="${entry.items.cover_image_url ?? ""}" alt="" onerror="this.style.visibility='hidden'" />
+      <span>${entry.items.categories.icon ?? ""} <strong>${escapeHtml(entry.items.title)}</strong> — ajouté il y a ${yearsAgo} an${yearsAgo > 1 ? "s" : ""} (${date.getFullYear()})</span>
+    `;
+    el.onThisDayContent.appendChild(row);
+  });
+}
+
+// ---- récap annuel "Wrapped" : bilan de l'année en cours, façon Spotify Wrapped ----
+el.wrappedGenerateBtn.addEventListener("click", async () => {
+  const entries = collectionEntriesCache.length ? collectionEntriesCache : await fetchCollectionEntries();
+  const year = new Date().getFullYear();
+  const addedThisYear = entries.filter((e) => e.status === "owned" && new Date(e.created_at).getFullYear() === year);
+
+  if (!addedThisYear.length) {
+    el.wrappedContent.innerHTML = `<p class="empty">Pas encore d'ajout en ${year} — reviens plus tard dans l'année !</p>`;
+    return;
+  }
+
+  const byCategory = new Map();
+  addedThisYear.forEach((e) => {
+    const name = e.items.categories.name;
+    byCategory.set(name, (byCategory.get(name) ?? 0) + 1);
+  });
+  const topCategory = [...byCategory.entries()].sort((a, b) => b[1] - a[1])[0];
+
+  const sorted = [...addedThisYear].sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+  const first = sorted[0];
+  const last = sorted[sorted.length - 1];
+  const totalOwned = entries.filter((e) => e.status === "owned").length;
+
+  const card = document.createElement("div");
+  card.className = "wrapped-card";
+  card.innerHTML = `
+    <h4>📊 Ton année ${year} en collection</h4>
+    <div class="wrapped-stats">
+      <div><div class="wrapped-stat-value">${addedThisYear.length}</div><div class="wrapped-stat-label">nouveaux items</div></div>
+      <div><div class="wrapped-stat-value">${topCategory[0]}</div><div class="wrapped-stat-label">catégorie dominante (${topCategory[1]})</div></div>
+      <div><div class="wrapped-stat-value">${totalOwned}</div><div class="wrapped-stat-label">items au total</div></div>
+    </div>
+    <p>Premier ajout de l'année : ${escapeHtml(first.items.title)}${sorted.length > 1 ? ` — dernier en date : ${escapeHtml(last.items.title)}` : ""}</p>
+    <button type="button" class="wrapped-copy-btn">📋 Copier en texte</button>
+  `;
+  card.querySelector(".wrapped-copy-btn").addEventListener("click", async () => {
+    const text = `📊 Mon année ${year} en collection sur Collect Me :\n${addedThisYear.length} nouveaux items, dont surtout ${topCategory[0]} (${topCategory[1]})\n${totalOwned} items au total dans ma collection !`;
+    try {
+      await navigator.clipboard.writeText(text);
+      alert("Copié !");
+    } catch (_e) {
+      alert(text);
+    }
+  });
+  el.wrappedContent.innerHTML = "";
+  el.wrappedContent.appendChild(card);
+});
 
 // ---- comparer sa collection avec celle d'un ami : repose sur la vitrine publique de l'ami
 // (public_showcase_items), donc jamais d'accès aux collections privées — seulement ce que
@@ -2143,7 +2236,7 @@ async function openAccountView() {
 
   const { data: profile, error } = await sb
     .from("profiles")
-    .select("username, display_name, bio, avatar_url, banner_url, public_showcase")
+    .select("username, display_name, bio, avatar_url, banner_url, public_showcase, theme_color")
     .eq("id", currentUser.id)
     .maybeSingle();
   if (error) return alert(error.message);
@@ -2152,6 +2245,7 @@ async function openAccountView() {
   el.accountUsernameInput.dataset.original = profile?.username || "";
   el.accountDisplayNameInput.value = profile?.display_name || currentUser.user_metadata?.full_name || "";
   el.accountBioInput.value = profile?.bio || "";
+  el.accountThemeColorInput.value = profile?.theme_color || "#c96a3f";
   el.accountShowcaseCheckbox.checked = profile?.public_showcase ?? false;
   updateAccountLinkVisibility(profile?.public_showcase ?? false, profile?.username || null);
   setAccountImagePreview(el.accountAvatarImg, profile?.avatar_url);
@@ -2276,6 +2370,7 @@ el.accountProfileForm.addEventListener("submit", async (e) => {
       username,
       display_name: el.accountDisplayNameInput.value.trim() || currentUser.user_metadata?.full_name || currentUser.email || null,
       bio: el.accountBioInput.value.trim() || null,
+      theme_color: el.accountThemeColorInput.value || null,
       public_showcase: isPublic,
     },
     { onConflict: "id" }
@@ -2444,7 +2539,7 @@ async function renderPublicShowcase({ userId, username }) {
 
   let profileQuery = sb
     .from("profiles")
-    .select("id, display_name, public_showcase, username, bio, avatar_url, banner_url");
+    .select("id, display_name, public_showcase, username, bio, avatar_url, banner_url, theme_color");
   profileQuery = username ? profileQuery.eq("username", username) : profileQuery.eq("id", userId);
   const { data: profile, error: profileError } = await profileQuery.maybeSingle();
 
@@ -2477,6 +2572,7 @@ async function renderPublicShowcase({ userId, username }) {
   } else {
     el.showcaseBanner.hidden = true;
   }
+  if (profile.theme_color) applyThemeColor(profile.theme_color);
 
   const [{ data: items, error }, { data: forSaleItems }] = await Promise.all([
     sb.from("public_showcase_items").select("*").eq("user_id", userId),
@@ -2779,6 +2875,26 @@ function escapeHtml(str) {
   return String(str).replace(/[&<>"']/g, (c) => (
     { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
   ));
+}
+
+// ---- thème de profil personnalisable : applique une couleur d'accent custom sur la page de
+// profil public (dérive une variante plus sombre pour le hover et plus claire pour les fonds
+// "soft", pour rester cohérent avec les 3 variables --accent* du thème de base) ----
+function shadeColor(hex, percent) {
+  const num = parseInt(hex.slice(1), 16);
+  const clamp = (v) => Math.max(0, Math.min(255, v));
+  const r = clamp((num >> 16) + Math.round(2.55 * percent));
+  const g = clamp(((num >> 8) & 0xff) + Math.round(2.55 * percent));
+  const b = clamp((num & 0xff) + Math.round(2.55 * percent));
+  return `#${((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1)}`;
+}
+
+function applyThemeColor(hex) {
+  if (!hex || !/^#[0-9a-fA-F]{6}$/.test(hex)) return;
+  const root = document.documentElement.style;
+  root.setProperty("--accent", hex);
+  root.setProperty("--accent-hover", shadeColor(hex, -15));
+  root.setProperty("--accent-soft", shadeColor(hex, 75));
 }
 
 // ---------- bulle résumée d'item (clic sur un item -> résumé -> fiche complète) ----------
