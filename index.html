@@ -40,6 +40,14 @@
 
       <div class="catalogue-columns">
         <div class="catalogue-main">
+          <div class="catalogue-toolbar">
+            <input id="catalogue-search" type="text" placeholder="Rechercher dans le catalogue..." autocomplete="off" />
+            <select id="catalogue-sort">
+              <option value="recent">Plus récents</option>
+              <option value="title">Titre (A → Z)</option>
+              <option value="year">Année</option>
+            </select>
+          </div>
           <div id="catalogue-list"></div>
 
           <form id="add-item-form">
@@ -66,7 +74,10 @@
     </section>
 
     <section id="collection-view" hidden>
-      <select id="collection-filter"></select>
+      <div class="catalogue-toolbar">
+        <input id="collection-search" type="text" placeholder="Rechercher dans ma collection..." autocomplete="off" />
+        <select id="collection-filter"></select>
+      </div>
       <div id="collection-list"></div>
     </section>
 

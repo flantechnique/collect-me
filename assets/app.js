@@ -6,6 +6,10 @@ const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 let currentUser = null;
 let categories = [];
 let activeCategorySlug = null;
+let currentCatalogueItems = [];
+let catalogueSearchQuery = "";
+let catalogueSortKey = "recent";
+let collectionSearchQuery = "";
 
 // ---------- elements ----------
 const el = {
@@ -40,6 +44,9 @@ const el = {
   creatorTitle: document.getElementById("creator-title"),
   creatorList: document.getElementById("creator-list"),
   creatorBack: document.getElementById("creator-back"),
+  catalogueSearch: document.getElementById("catalogue-search"),
+  catalogueSort: document.getElementById("catalogue-sort"),
+  collectionSearch: document.getElementById("collection-search"),
 };
 
 let currentDetail = null;
@@ -228,6 +235,10 @@ function selectCategory(slug) {
   el.catalogueTitle.textContent = `${cat.icon ?? ""} ${cat.name}`.trim();
 
   renderAddItemFields();
+  catalogueSearchQuery = "";
+  catalogueSortKey = "recent";
+  el.catalogueSearch.value = "";
+  el.catalogueSort.value = "recent";
   loadCatalogue();
 
   const hasExternalSearch = Boolean(CATEGORY_SEARCH_FUNCTIONS[slug]);
@@ -252,12 +263,56 @@ async function loadCatalogue() {
     .order("created_at", { ascending: false });
   if (error) return console.error(error);
 
+  currentCatalogueItems = data;
+  renderCatalogueList();
+}
+
+el.catalogueSearch.addEventListener("input", () => {
+  catalogueSearchQuery = el.catalogueSearch.value.trim().toLowerCase();
+  renderCatalogueList();
+});
+
+el.catalogueSort.addEventListener("change", () => {
+  catalogueSortKey = el.catalogueSort.value;
+  renderCatalogueList();
+});
+
+function sortComparator(key) {
+  return (a, b) => {
+    if (key === "title") return a.title.localeCompare(b.title);
+    if (key === "year") {
+      const yearOf = (item) => Number(
+        item.attributes?.pressing_year ?? item.attributes?.release_year ?? item.attributes?.year ?? 0
+      );
+      return yearOf(b) - yearOf(a);
+    }
+    return new Date(b.created_at) - new Date(a.created_at);
+  };
+}
+
+function renderCatalogueList() {
+  const cat = currentCategory();
+  if (!cat) return;
+
+  let items = currentCatalogueItems;
+  if (catalogueSearchQuery) {
+    items = items.filter((item) => {
+      if (item.title.toLowerCase().includes(catalogueSearchQuery)) return true;
+      return Object.values(item.attributes || {}).some((v) =>
+        String(v).toLowerCase().includes(catalogueSearchQuery)
+      );
+    });
+  }
+  items = [...items].sort(sortComparator(catalogueSortKey));
+
   el.catalogueList.innerHTML = "";
-  if (!data.length) {
-    el.catalogueList.innerHTML = "<p class='empty'>Aucun item pour l'instant dans cette catégorie.</p>";
+  if (!items.length) {
+    el.catalogueList.innerHTML = currentCatalogueItems.length
+      ? "<p class='empty'>Aucun item ne correspond à ta recherche.</p>"
+      : "<p class='empty'>Aucun item pour l'instant dans cette catégorie.</p>";
     return;
   }
-  data.forEach((item) => el.catalogueList.appendChild(renderItemCard(item, cat)));
+  items.forEach((item) => el.catalogueList.appendChild(renderItemCard(item, cat)));
 }
 
 function renderItemCard(item, cat) {
@@ -407,11 +462,16 @@ async function loadMyCollection() {
   if (error) return console.error(error);
 
   const filterSlug = el.collectionFilter.value;
-  const rows = filterSlug ? data.filter((r) => r.items.categories.slug === filterSlug) : data;
+  let rows = filterSlug ? data.filter((r) => r.items.categories.slug === filterSlug) : data;
+  if (collectionSearchQuery) {
+    rows = rows.filter((r) => r.items.title.toLowerCase().includes(collectionSearchQuery));
+  }
 
   el.collectionList.innerHTML = "";
   if (!rows.length) {
-    el.collectionList.innerHTML = "<p class='empty'>Rien ici pour l'instant.</p>";
+    el.collectionList.innerHTML = data.length
+      ? "<p class='empty'>Aucun item ne correspond.</p>"
+      : "<p class='empty'>Rien ici pour l'instant.</p>";
     return;
   }
 
@@ -481,6 +541,14 @@ function renderCollectionGroup(group) {
   };
   actions.appendChild(plusBtn);
 
+  const detailsBtn = document.createElement("button");
+  detailsBtn.textContent = "Détails";
+  detailsBtn.onclick = (e) => {
+    e.stopPropagation();
+    toggleEntryDetailsForm(card, entryIds[entryIds.length - 1]);
+  };
+  actions.appendChild(detailsBtn);
+
   card.appendChild(actions);
   attachItemBubble(card, item, item.categories);
   return card;
@@ -492,11 +560,73 @@ async function removeCollectionEntry(entryId) {
   loadMyCollection();
 }
 
+// ---------- détails d'un exemplaire (état, prix payé, date d'acquisition, notes) ----------
+// Sur un groupe avec doublons, agit sur l'exemplaire le plus récemment ajouté — cohérent
+// avec le bouton "− 1 exemplaire" qui retire déjà ce même exemplaire en premier.
+async function toggleEntryDetailsForm(card, entryId) {
+  const existing = card.querySelector(".entry-details-form");
+  if (existing) {
+    existing.remove();
+    return;
+  }
+
+  const { data: entry, error } = await sb
+    .from("collection_entries")
+    .select("*")
+    .eq("id", entryId)
+    .single();
+  if (error) return alert(error.message);
+
+  const form = document.createElement("form");
+  form.className = "entry-details-form";
+  form.innerHTML = `
+    <label>État
+      <input name="condition" value="${escapeHtml(entry.condition ?? "")}" placeholder="Neuf, Bon état..." />
+    </label>
+    <label>Prix payé (€)
+      <input name="price_paid" type="number" step="0.01" min="0" value="${entry.price_paid ?? ""}" />
+    </label>
+    <label>Date d'acquisition
+      <input name="acquired_at" type="date" value="${entry.acquired_at ?? ""}" />
+    </label>
+    <label class="full-width">Notes
+      <textarea name="notes">${escapeHtml(entry.notes ?? "")}</textarea>
+    </label>
+    <div class="actions">
+      <button type="submit">Enregistrer</button>
+      <button type="button" class="cancel-btn">Annuler</button>
+    </div>
+  `;
+  form.addEventListener("click", (e) => e.stopPropagation());
+  form.querySelector(".cancel-btn").addEventListener("click", () => form.remove());
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const fd = new FormData(form);
+    const { error: updateError } = await sb
+      .from("collection_entries")
+      .update({
+        condition: fd.get("condition")?.trim() || null,
+        price_paid: fd.get("price_paid") || null,
+        acquired_at: fd.get("acquired_at") || null,
+        notes: fd.get("notes")?.trim() || null,
+      })
+      .eq("id", entryId);
+    if (updateError) return alert(updateError.message);
+    form.remove();
+  });
+
+  card.appendChild(form);
+}
+
 function statusLabel(status) {
   return { owned: "Possédé", wanted: "Recherché", for_sale: "À vendre" }[status] ?? status;
 }
 
 el.collectionFilter.addEventListener("change", loadMyCollection);
+el.collectionSearch.addEventListener("input", () => {
+  collectionSearchQuery = el.collectionSearch.value.trim().toLowerCase();
+  loadMyCollection();
+});
 
 // ---------- view switching ----------
 function goHome() {
@@ -762,8 +892,122 @@ function renderLocalItemDetail(item, cat) {
     wantedBtn.textContent = "Ajouter à ma wantlist";
     wantedBtn.onclick = () => addToCollection(item.id, "wanted");
     actions.append(ownedBtn, wantedBtn);
+    if (item.created_by === currentUser.id) {
+      const editBtn = document.createElement("button");
+      editBtn.textContent = "Modifier la fiche";
+      editBtn.onclick = () => renderItemEditForm(item, cat);
+      actions.appendChild(editBtn);
+    }
     el.detailContent.appendChild(actions);
   }
+
+  renderOwnershipCounts(el.detailContent, item.id);
+}
+
+// ---------- édition d'une fiche catalogue (réservée à son créateur, cf. RLS) ----------
+function renderItemEditForm(item, cat) {
+  const form = document.createElement("form");
+  form.className = "edit-item-form";
+
+  const titleLabel = document.createElement("label");
+  titleLabel.textContent = "Titre";
+  const titleInput = document.createElement("input");
+  titleInput.name = "title";
+  titleInput.value = item.title;
+  titleInput.required = true;
+  titleLabel.appendChild(titleInput);
+  form.appendChild(titleLabel);
+
+  const coverLabel = document.createElement("label");
+  coverLabel.textContent = "URL de la pochette";
+  const coverInput = document.createElement("input");
+  coverInput.name = "cover_image_url";
+  coverInput.value = item.cover_image_url ?? "";
+  coverInput.placeholder = "https://...";
+  coverLabel.appendChild(coverInput);
+  form.appendChild(coverLabel);
+
+  const fieldInputs = {};
+  (cat.attribute_schema || []).forEach((field) => {
+    const label = document.createElement("label");
+    label.textContent = field.label;
+    let input;
+    if (field.type === "select") {
+      input = document.createElement("select");
+      input.innerHTML = '<option value=""></option>' +
+        field.options.map((o) => `<option value="${o}">${o}</option>`).join("");
+      input.value = item.attributes?.[field.key] ?? "";
+    } else {
+      input = document.createElement("input");
+      input.type = field.type === "number" ? "number" : "text";
+      input.value = item.attributes?.[field.key] ?? "";
+    }
+    fieldInputs[field.key] = input;
+    label.appendChild(input);
+    form.appendChild(label);
+  });
+
+  const actions = document.createElement("div");
+  actions.className = "actions";
+  const saveBtn = document.createElement("button");
+  saveBtn.type = "submit";
+  saveBtn.textContent = "Enregistrer";
+  const cancelBtn = document.createElement("button");
+  cancelBtn.type = "button";
+  cancelBtn.textContent = "Annuler";
+  cancelBtn.onclick = () => renderLocalItemDetail(item, cat);
+  actions.append(saveBtn, cancelBtn);
+  form.appendChild(actions);
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const attributes = {};
+    Object.entries(fieldInputs).forEach(([key, input]) => {
+      if (input.value) attributes[key] = input.value;
+    });
+    const { data, error } = await sb
+      .from("items")
+      .update({
+        title: titleInput.value.trim(),
+        cover_image_url: coverInput.value.trim() || null,
+        attributes,
+      })
+      .eq("id", item.id)
+      .select()
+      .single();
+    if (error) return alert(error.message);
+    renderLocalItemDetail(data, cat);
+    loadCatalogue();
+  });
+
+  el.detailContent.innerHTML = "";
+  const heading = document.createElement("h2");
+  heading.textContent = `Modifier « ${item.title} »`;
+  el.detailContent.appendChild(heading);
+  el.detailContent.appendChild(form);
+}
+
+// ---------- "possédé par / recherché par" (comptages anonymisés, aucune identité exposée) ----------
+async function renderOwnershipCounts(container, itemId) {
+  if (!itemId) return;
+  const { data, error } = await sb
+    .from("item_ownership_counts")
+    .select("status, cnt")
+    .eq("item_id", itemId);
+  if (error || !data?.length) return;
+
+  const owned = data.find((d) => d.status === "owned")?.cnt ?? 0;
+  const wanted = data.find((d) => d.status === "wanted")?.cnt ?? 0;
+  if (!owned && !wanted) return;
+
+  const parts = [];
+  if (owned) parts.push(`👥 possédé par ${owned} collectionneur${owned > 1 ? "s" : ""}`);
+  if (wanted) parts.push(`⭐ recherché par ${wanted} collectionneur${wanted > 1 ? "s" : ""}`);
+
+  const p = document.createElement("p");
+  p.className = "ownership-counts";
+  p.textContent = parts.join(" · ");
+  container.appendChild(p);
 }
 
 // ---------- œuvres d'un artiste / studio ----------
@@ -931,7 +1175,20 @@ async function openDetail(r, cat) {
     platforms: payload.platforms ?? [],
     selectedVersionIndex: 0,
     selectedPlatform: (payload.platforms ?? [])[0] ?? null,
+    localItemId: null,
   };
+
+  const extKey = EXTERNAL_ID_KEY[cat.slug];
+  if (extKey && id) {
+    const { data: localMatch } = await sb
+      .from("items")
+      .select("id")
+      .eq("category_id", cat.id)
+      .eq(`external_ids->>${extKey}`, String(id))
+      .maybeSingle();
+    currentDetail.localItemId = localMatch?.id ?? null;
+  }
+
   renderDetail();
   loadTopReferences(cat); // cette consultation vient d'être journalisée côté serveur
 }
@@ -1066,6 +1323,10 @@ function renderDetail() {
   wantedBtn.onclick = () => addDetailToCollection("wanted");
   actions.append(ownedBtn, wantedBtn);
   el.detailContent.appendChild(actions);
+
+  if (currentDetail.localItemId) {
+    renderOwnershipCounts(el.detailContent, currentDetail.localItemId);
+  }
 }
 
 function buildDetailSelect(labelText, options, selectedValue, onChange) {
