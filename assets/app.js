@@ -21,6 +21,16 @@ const el = {
   addItemFields: document.getElementById("add-item-fields"),
   addItemTitle: document.getElementById("add-item-title"),
   collectionFilter: document.getElementById("collection-filter"),
+  externalSearch: document.getElementById("external-search"),
+  externalSearchInput: document.getElementById("external-search-input"),
+  externalSearchBtn: document.getElementById("external-search-btn"),
+  externalSearchResults: document.getElementById("external-search-results"),
+};
+
+// Catégories pour lesquelles une edge function de recherche externe existe.
+// Ajouter une entrée ici active automatiquement le bloc de recherche pour la catégorie.
+const CATEGORY_SEARCH_FUNCTIONS = {
+  vinyl: "discogs-search",
 };
 
 // ---------- auth ----------
@@ -93,6 +103,11 @@ function selectCategory(slug) {
   });
   renderAddItemFields();
   loadCatalogue();
+
+  const hasExternalSearch = Boolean(CATEGORY_SEARCH_FUNCTIONS[slug]);
+  el.externalSearch.hidden = !hasExternalSearch;
+  el.externalSearchResults.innerHTML = "";
+  el.externalSearchInput.value = "";
 }
 
 // ---------- catalogue ----------
@@ -258,6 +273,93 @@ function switchView(view) {
   el.viewCollectionBtn.classList.toggle("active", view === "collection");
   if (view === "collection") loadMyCollection();
 }
+
+// ---------- recherche externe (Discogs, IGDB...) ----------
+async function searchExternal() {
+  const cat = currentCategory();
+  const fnName = CATEGORY_SEARCH_FUNCTIONS[cat.slug];
+  const query = el.externalSearchInput.value.trim();
+  if (!fnName || !query) return;
+
+  const { data: { session } } = await sb.auth.getSession();
+  if (!session) {
+    alert("Connecte-toi pour rechercher.");
+    return;
+  }
+
+  el.externalSearchResults.innerHTML = "<p class='empty'>Recherche...</p>";
+  const res = await fetch(
+    `${SUPABASE_URL}/functions/v1/${fnName}?q=${encodeURIComponent(query)}`,
+    { headers: { Authorization: `Bearer ${session.access_token}` } }
+  );
+  const payload = await res.json();
+  if (!res.ok) {
+    el.externalSearchResults.innerHTML = `<p class='empty'>Erreur : ${payload.error ?? res.statusText}</p>`;
+    return;
+  }
+  renderExternalResults(payload.results ?? [], cat);
+}
+
+function renderExternalResults(results, cat) {
+  el.externalSearchResults.innerHTML = "";
+  if (!results.length) {
+    el.externalSearchResults.innerHTML = "<p class='empty'>Aucun résultat.</p>";
+    return;
+  }
+  results.forEach((r) => {
+    const card = document.createElement("div");
+    card.className = "card";
+    card.innerHTML = `
+      <h3>${r.title}</h3>
+      <ul class="attrs">
+        ${r.label ? `<li>Label : ${r.label}</li>` : ""}
+        ${r.year ? `<li>Année : ${r.year}</li>` : ""}
+        ${r.format ? `<li>Format : ${r.format}</li>` : ""}
+      </ul>
+    `;
+    const btn = document.createElement("button");
+    btn.textContent = "Importer dans le catalogue";
+    btn.onclick = () => importExternalResult(r, cat);
+    card.appendChild(btn);
+    el.externalSearchResults.appendChild(card);
+  });
+}
+
+async function importExternalResult(r, cat) {
+  const attributes = {};
+  if (r.label) attributes.label = r.label;
+  if (r.year) attributes.pressing_year = r.year;
+  if (r.format) attributes.format = r.format;
+
+  const { data, error } = await sb
+    .from("items")
+    .insert({
+      category_id: cat.id,
+      title: r.title,
+      cover_image_url: r.cover_image ?? null,
+      external_ids: { discogs_id: r.discogs_id },
+      attributes,
+      source: "external_api",
+      created_by: currentUser.id,
+    })
+    .select()
+    .single();
+
+  if (error) return alert(error.message);
+
+  el.externalSearchResults.innerHTML = "";
+  el.externalSearchInput.value = "";
+  loadCatalogue();
+  addToCollection(data.id, "owned");
+}
+
+el.externalSearchBtn.addEventListener("click", searchExternal);
+el.externalSearchInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    searchExternal();
+  }
+});
 
 // ---------- boot ----------
 initAuth();
