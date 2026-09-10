@@ -75,6 +75,11 @@ const el = {
   viewFunBtn: document.getElementById("view-fun"),
   funView: document.getElementById("fun-view"),
   recommendationsContent: document.getElementById("recommendations-content"),
+  compareInput: document.getElementById("compare-input"),
+  compareBtn: document.getElementById("compare-btn"),
+  compareResult: document.getElementById("compare-result"),
+  digestContent: document.getElementById("digest-content"),
+  creatorFollowRow: document.getElementById("creator-follow-row"),
   timelineContent: document.getElementById("timeline-content"),
   rouletteBtn: document.getElementById("roulette-btn"),
   rouletteResult: document.getElementById("roulette-result"),
@@ -1178,9 +1183,23 @@ async function importCsv(file) {
   const attrKeys = (cat.attribute_schema || []).map((f) => f.key);
   el.csvImportStatus.hidden = false;
 
+  // détection d'un export natif Discogs ("Exporter" depuis la collection Discogs) : on le
+  // reconnaît à ses colonnes caractéristiques et on le remappe vers nos colonnes internes,
+  // en conservant release_id comme identifiant externe pour un dédoublonnage précis avec
+  // le catalogue partagé (au lieu de retomber sur un dédoublonnage approximatif par titre)
+  const isDiscogsExport =
+    DISCOGS_CATEGORIES.includes(cat.slug) &&
+    "title" in rows[0] &&
+    "release_id" in rows[0] &&
+    ("artist" in rows[0] || "label" in rows[0]);
+  if (isDiscogsExport) {
+    el.csvImportStatus.textContent = "Export Discogs détecté, conversion en cours...";
+  }
+
   let added = 0, reused = 0, errors = 0;
   for (let i = 0; i < rows.length; i++) {
-    const r = rows[i];
+    const raw = rows[i];
+    const r = isDiscogsExport ? mapDiscogsExportRow(raw) : raw;
     el.csvImportStatus.textContent = `Import en cours... (${i + 1}/${rows.length})`;
     const title = (r["titre"] || "").trim();
     if (!title) { errors++; continue; }
@@ -1192,7 +1211,7 @@ async function importCsv(file) {
       const { item, created } = await findOrCreateItem({
         cat,
         title,
-        externalIds: {},
+        externalIds: r["__discogs_id"] ? { discogs_id: r["__discogs_id"] } : {},
         attributes,
         coverImageUrl: r["image_url"] || null,
         source: "csv_import",
@@ -1216,12 +1235,35 @@ async function importCsv(file) {
   }
 
   el.csvImportStatus.textContent =
-    `Import terminé : ${added} nouvel${added > 1 ? "s" : ""} item${added > 1 ? "s" : ""} créé${added > 1 ? "s" : ""}, ` +
+    `Import terminé${isDiscogsExport ? " (export Discogs)" : ""} : ${added} nouvel${added > 1 ? "s" : ""} item${added > 1 ? "s" : ""} créé${added > 1 ? "s" : ""}, ` +
     `${reused} déjà existant${reused > 1 ? "s" : ""} réutilisé${reused > 1 ? "s" : ""}, ` +
     `${errors} ligne${errors > 1 ? "s" : ""} en erreur.`;
 
   loadCatalogue();
   if (!el.collectionView.hidden) loadMyCollection();
+}
+
+// remappe une ligne d'export natif Discogs (colonnes Artist/Title/Label/Format/Released/
+// release_id/Date Added/Collection Media Condition/Collection Sleeve Condition/Collection
+// Notes, en-têtes déjà passés en minuscules par parseCsv) vers nos colonnes internes
+function mapDiscogsExportRow(r) {
+  const condition = [r["collection media condition"], r["collection sleeve condition"]]
+    .filter(Boolean)
+    .join(" / ");
+  const dateMatch = String(r["date added"] || "").match(/^(\d{4}-\d{2}-\d{2})/);
+  return {
+    titre: r["title"] || "",
+    statut: "possede",
+    etat: condition,
+    prix: "",
+    date_acquisition: dateMatch ? dateMatch[1] : "",
+    notes: r["collection notes"] || "",
+    artist: r["artist"] || "",
+    label: r["label"] || "",
+    pressing_year: r["released"] || "",
+    format: r["format"] || "",
+    __discogs_id: r["release_id"] || "",
+  };
 }
 
 // ---------- récupération partagée de la collection (stats, badges, roulette, quiz, frise) ----------
@@ -1421,12 +1463,180 @@ async function loadFunView() {
   }
   el.timelineContent.innerHTML = "<p class='empty'>Chargement...</p>";
   const entries = await fetchCollectionEntries();
+  loadCreatorDigest(entries);
   renderRecommendations(entries);
   renderTimeline(entries);
   renderBadges(entries);
   el.rouletteResult.innerHTML = "";
   el.quizQuestion.innerHTML = "";
+  el.compareResult.innerHTML = "";
   loadShowcaseSettings();
+}
+
+// ---- digest des nouveautés des créateurs suivis : une recherche "œuvres du créateur" par
+// créateur suivi (même mode que la page créateur), en écartant ce qui est déjà possédé ----
+async function loadCreatorDigest(entries) {
+  el.digestContent.innerHTML = "";
+  if (!currentUser) return;
+
+  const { data: followed, error } = await sb
+    .from("followed_creators")
+    .select("*")
+    .eq("user_id", currentUser.id)
+    .order("created_at", { ascending: false });
+  if (error || !followed?.length) {
+    el.digestContent.innerHTML =
+      "<p class='empty'>Suis un artiste, un auteur, un studio ou un réalisateur depuis sa page pour voir ses nouveautés ici.</p>";
+    return;
+  }
+
+  const { data: { session } } = await sb.auth.getSession();
+  if (!session) {
+    el.digestContent.innerHTML = "<p class='empty'>Connecte-toi pour voir les nouveautés.</p>";
+    return;
+  }
+
+  const ownedExternalIds = new Set();
+  entries
+    .filter((e) => e.status === "owned")
+    .forEach((e) => {
+      Object.values(e.items.external_ids || {}).forEach((v) => ownedExternalIds.add(String(v)));
+    });
+
+  el.digestContent.innerHTML = "<p class='empty'>Recherche des nouveautés...</p>";
+  const sections = [];
+
+  for (const follow of followed) {
+    const cat = categories.find((c) => c.slug === follow.category_slug);
+    const fnName = cat && CATEGORY_SEARCH_FUNCTIONS[cat.slug];
+    if (!cat || !fnName) continue;
+
+    const params = new URLSearchParams({ category_id: cat.id });
+    if (DISCOGS_CATEGORIES.includes(cat.slug)) {
+      if (follow.creator_id) params.set("artist_id", follow.creator_id);
+      else params.set("artist", follow.creator_name);
+    } else if (cat.slug === "video_game") {
+      params.set("publisher", follow.creator_name);
+    } else if (cat.slug === "book") {
+      if (follow.creator_id) params.set("author_id", follow.creator_id);
+      else params.set("author", follow.creator_name);
+    } else if (TMDB_CATEGORIES.includes(cat.slug)) {
+      if (follow.creator_id) params.set("person_id", follow.creator_id);
+      else params.set("person", follow.creator_name);
+    }
+
+    try {
+      const res = await fetch(`${SUPABASE_URL}/functions/v1/${fnName}?${params}`, {
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+      const payload = await res.json();
+      if (!res.ok) continue;
+
+      const idKey = EXTERNAL_ID_KEY[cat.slug];
+      const works = (payload.results ?? [])
+        .filter((w) => !ownedExternalIds.has(String(w[idKey])))
+        .sort((a, b) => (b.year ?? 0) - (a.year ?? 0))
+        .slice(0, 3);
+      if (!works.length) continue;
+
+      const section = document.createElement("div");
+      section.className = "digest-creator";
+      section.innerHTML = `<h4>${creatorIcon(cat)} ${escapeHtml(follow.creator_name)}</h4>`;
+      const row = document.createElement("div");
+      row.className = "digest-row";
+      works.forEach((w) => {
+        const item = document.createElement("div");
+        item.className = "timeline-item";
+        item.innerHTML = `
+          <img src="${w.cover_image ?? ""}" alt="" onerror="this.style.visibility='hidden'" />
+          <span>${escapeHtml(w.title)}${w.year ? ` (${w.year})` : ""}</span>
+        `;
+        item.onclick = () => openDetail(w, cat);
+        row.appendChild(item);
+      });
+      section.appendChild(row);
+      sections.push(section);
+    } catch (_e) {
+      // une source indisponible ne doit pas bloquer les autres créateurs suivis
+    }
+  }
+
+  el.digestContent.innerHTML = "";
+  if (!sections.length) {
+    el.digestContent.innerHTML =
+      "<p class='empty'>Pas de nouveauté détectée pour tes créateurs suivis pour l'instant.</p>";
+    return;
+  }
+  sections.forEach((s) => el.digestContent.appendChild(s));
+}
+
+// ---- comparer sa collection avec celle d'un ami : repose sur la vitrine publique de l'ami
+// (public_showcase_items), donc jamais d'accès aux collections privées — seulement ce que
+// l'ami a lui-même choisi de rendre visible ----
+el.compareBtn.addEventListener("click", compareWithFriend);
+
+function extractShowcaseUserId(raw) {
+  const linkMatch = raw.match(/showcase=([0-9a-f-]{36})/i);
+  if (linkMatch) return linkMatch[1];
+  const bareMatch = raw.trim().match(/^[0-9a-f-]{36}$/i);
+  return bareMatch ? bareMatch[0] : null;
+}
+
+async function compareWithFriend() {
+  const raw = el.compareInput.value.trim();
+  if (!raw) return;
+  const friendId = extractShowcaseUserId(raw);
+  if (!friendId) {
+    el.compareResult.innerHTML = "<p class='empty'>Lien ou identifiant de vitrine invalide.</p>";
+    return;
+  }
+  if (currentUser && friendId === currentUser.id) {
+    el.compareResult.innerHTML = "<p class='empty'>C'est ton propre lien de vitrine !</p>";
+    return;
+  }
+
+  el.compareResult.innerHTML = "<p class='empty'>Comparaison en cours...</p>";
+
+  const { data: profile } = await sb
+    .from("profiles")
+    .select("display_name, public_showcase")
+    .eq("id", friendId)
+    .maybeSingle();
+  if (!profile || !profile.public_showcase) {
+    el.compareResult.innerHTML = "<p class='empty'>Cette personne n'a pas (ou plus) de vitrine publique activée.</p>";
+    return;
+  }
+  const friendName = profile.display_name || "cette personne";
+
+  const { data: friendItems, error } = await sb.from("public_showcase_items").select("*").eq("user_id", friendId);
+  if (error) {
+    el.compareResult.innerHTML = "<p class='empty'>Impossible de charger sa vitrine pour l'instant.</p>";
+    return;
+  }
+
+  const entries = collectionEntriesCache.length ? collectionEntriesCache : await fetchCollectionEntries();
+  const ownedIds = new Set(entries.filter((e) => e.status === "owned").map((e) => e.item_id));
+  const uniqueFriendItems = [...new Map((friendItems ?? []).map((i) => [i.item_id, i])).values()];
+  const common = uniqueFriendItems.filter((i) => ownedIds.has(i.item_id));
+
+  if (!common.length) {
+    el.compareResult.innerHTML = `<p class='empty'>Aucun item en commun avec ${escapeHtml(friendName)} pour l'instant.</p>`;
+    return;
+  }
+
+  el.compareResult.innerHTML = `<p>${common.length} item${common.length > 1 ? "s" : ""} en commun avec ${escapeHtml(friendName)} :</p>`;
+  const grid = document.createElement("div");
+  grid.className = "pokedex-grid";
+  common.forEach((item) => {
+    const card = document.createElement("div");
+    card.className = "pokedex-card owned";
+    card.innerHTML = `
+      <img src="${item.cover_image_url ?? ""}" alt="" onerror="this.style.visibility='hidden'" />
+      <div class="pokedex-title">${item.category_icon ?? ""} ${escapeHtml(item.title)}</div>
+    `;
+    grid.appendChild(card);
+  });
+  el.compareResult.appendChild(grid);
 }
 
 // ---- recommandations "si tu as aimé X" : suggestions basées sur les genres des items
@@ -2133,6 +2343,7 @@ async function openCreatorWorks({ cat, name, artistId }) {
   switchView("creator");
   el.creatorTitle.textContent = `${creatorIcon(cat)} ${name}`;
   el.creatorList.innerHTML = "<p class='empty'>Recherche des œuvres...</p>";
+  renderCreatorFollowButton(cat, name, artistId);
 
   const { data: { session } } = await sb.auth.getSession();
   if (!session) {
@@ -2163,6 +2374,50 @@ async function openCreatorWorks({ cat, name, artistId }) {
     return;
   }
   renderCreatorResults(payload.results ?? [], cat);
+}
+
+// ---- suivre un créateur : bouton bascule sur sa page, alimente le digest de nouveautés
+// dans "Découvrir" (voir loadCreatorDigest) ----
+async function renderCreatorFollowButton(cat, name, artistId) {
+  el.creatorFollowRow.innerHTML = "";
+  if (!currentUser) return;
+
+  const { data: existing } = await sb
+    .from("followed_creators")
+    .select("id")
+    .eq("user_id", currentUser.id)
+    .eq("category_slug", cat.slug)
+    .eq("creator_name", name)
+    .maybeSingle();
+
+  let followRowId = existing?.id ?? null;
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "tab";
+  btn.textContent = followRowId ? "🔕 Ne plus suivre" : "🔔 Suivre ce créateur";
+  btn.onclick = async () => {
+    if (followRowId) {
+      const { error } = await sb.from("followed_creators").delete().eq("id", followRowId);
+      if (error) return alert(error.message);
+      followRowId = null;
+      btn.textContent = "🔔 Suivre ce créateur";
+    } else {
+      const { data, error } = await sb
+        .from("followed_creators")
+        .insert({
+          user_id: currentUser.id,
+          category_slug: cat.slug,
+          creator_id: artistId || null,
+          creator_name: name,
+        })
+        .select()
+        .single();
+      if (error) return alert(error.message);
+      followRowId = data.id;
+      btn.textContent = "🔕 Ne plus suivre";
+    }
+  };
+  el.creatorFollowRow.appendChild(btn);
 }
 
 function renderCreatorResults(results, cat) {

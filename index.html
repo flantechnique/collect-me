@@ -63,7 +63,7 @@
 
           <div class="catalogue-import-row">
             <button id="csv-template-btn" type="button">⬇️ Modèle CSV</button>
-            <button id="csv-import-btn" type="button">⬆️ Importer un CSV</button>
+            <button id="csv-import-btn" type="button" title="Notre modèle, ou directement un export natif Discogs pour vinyles/CD">⬆️ Importer un CSV</button>
             <input id="csv-import-input" type="file" accept=".csv,text/csv" hidden />
           </div>
           <p id="csv-import-status" class="csv-import-status" hidden></p>
@@ -114,6 +114,11 @@
       <h2>Découvrir ma collection</h2>
 
       <div class="stats-section">
+        <h3>🔔 Nouveautés de mes créateurs suivis</h3>
+        <div id="digest-content"></div>
+      </div>
+
+      <div class="stats-section">
         <h3>🪧 Vitrine publique</h3>
         <label class="showcase-toggle" for="showcase-toggle-checkbox">
           <input type="checkbox" id="showcase-toggle-checkbox" />
@@ -123,6 +128,16 @@
           <input id="showcase-link-input" type="text" readonly />
           <button id="showcase-copy-btn" type="button">Copier le lien</button>
         </div>
+      </div>
+
+      <div class="stats-section">
+        <h3>🤝 Comparer avec un ami</h3>
+        <p class="empty">Colle le lien de vitrine (ou l'identifiant) d'un·e ami·e ayant activé sa vitrine publique.</p>
+        <div class="compare-row">
+          <input id="compare-input" type="text" placeholder="Lien ou identifiant de vitrine..." autocomplete="off" />
+          <button id="compare-btn" type="button">Comparer</button>
+        </div>
+        <div id="compare-result"></div>
       </div>
 
       <div class="stats-section">
@@ -161,6 +176,7 @@
     <section id="creator-view" hidden>
       <button id="creator-back" type="button" class="tab">← Retour</button>
       <h2 id="creator-title"></h2>
+      <div id="creator-follow-row"></div>
       <div id="creator-list"></div>
     </section>
 
