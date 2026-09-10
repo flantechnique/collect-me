@@ -2,6 +2,15 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY } from "./config.js";
 
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
+// ---------- PWA : installable + app shell hors-ligne (voir sw.js) ----------
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("./sw.js").catch(() => {
+      // pas bloquant : le site fonctionne normalement sans service worker
+    });
+  });
+}
+
 // ---------- state ----------
 let currentUser = null;
 let categories = [];
@@ -79,6 +88,11 @@ const el = {
   showcaseView: document.getElementById("showcase-view"),
   showcaseTitle: document.getElementById("showcase-title"),
   showcaseContent: document.getElementById("showcase-content"),
+  collectionPrintLabelsBtn: document.getElementById("collection-print-labels-btn"),
+  labelsView: document.getElementById("labels-view"),
+  labelsGrid: document.getElementById("labels-grid"),
+  labelsBackBtn: document.getElementById("labels-back-btn"),
+  printLabelsBtn: document.getElementById("print-labels-btn"),
 };
 
 let currentDetail = null;
@@ -646,6 +660,14 @@ function renderCollectionGroup(group) {
   };
   actions.appendChild(detailsBtn);
 
+  const labelBtn = document.createElement("button");
+  labelBtn.textContent = "🏷️ Étiquette";
+  labelBtn.onclick = (e) => {
+    e.stopPropagation();
+    openLabelsView([item]);
+  };
+  actions.appendChild(labelBtn);
+
   card.appendChild(actions);
   attachItemBubble(card, item, item.categories);
   return card;
@@ -798,6 +820,45 @@ el.collectionViewToggle.addEventListener("click", () => {
   loadMyCollection();
 });
 
+// ---------- étiquettes imprimables (QR code vers la fiche de l'item, via la librairie
+// "qrcode" chargée depuis jsdelivr) ----------
+el.collectionPrintLabelsBtn.addEventListener("click", async () => {
+  const entries = await fetchCollectionEntries();
+  const owned = entries.filter((e) => e.status === "owned");
+  const uniqueItems = [...new Map(owned.map((e) => [e.item_id, e.items])).values()];
+  if (!uniqueItems.length) {
+    alert("Rien à imprimer pour l'instant — ajoute des items possédés à ta collection.");
+    return;
+  }
+  openLabelsView(uniqueItems);
+});
+el.labelsBackBtn.addEventListener("click", () => switchView("collection"));
+el.printLabelsBtn.addEventListener("click", () => window.print());
+
+function openLabelsView(items) {
+  el.labelsGrid.innerHTML = "";
+  items.forEach((item) => {
+    const card = document.createElement("div");
+    card.className = "label-card";
+    const canvas = document.createElement("canvas");
+    card.appendChild(canvas);
+    const info = document.createElement("div");
+    info.className = "label-info";
+    info.innerHTML = `
+      <div class="label-title">${escapeHtml(item.title)}</div>
+      <div class="label-meta">${item.categories?.icon ?? ""} ${escapeHtml(item.categories?.name ?? "")}</div>
+    `;
+    card.appendChild(info);
+    el.labelsGrid.appendChild(card);
+
+    const url = `${location.origin}${location.pathname}?item=${item.id}`;
+    if (typeof QRCode !== "undefined") {
+      QRCode.toCanvas(canvas, url, { width: 72, margin: 0 }, () => {});
+    }
+  });
+  switchView("labels");
+}
+
 // ---------- view switching ----------
 function goHome() {
   unsubscribeCommunityFeed();
@@ -837,6 +898,7 @@ function switchView(view) {
   el.funView.hidden = view !== "fun";
   el.detailView.hidden = view !== "detail";
   el.creatorView.hidden = view !== "creator";
+  el.labelsView.hidden = view !== "labels";
   el.viewHomeBtn.classList.toggle("active", view === "home");
   el.viewCollectionBtn.classList.toggle("active", view === "collection");
   el.viewStatsBtn.classList.toggle("active", view === "stats");

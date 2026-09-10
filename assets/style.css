@@ -75,7 +75,7 @@ nav.main-nav {
   padding: 1.25rem 1.75rem 0;
 }
 
-nav.main-nav button, .tab, #collection-filter, select, #collection-view-toggle {
+nav.main-nav button, .tab, #collection-filter, select, #collection-view-toggle, #collection-print-labels-btn {
   background: var(--card);
   color: var(--text);
   border: 1px solid var(--border);
@@ -88,7 +88,7 @@ nav.main-nav button, .tab, #collection-filter, select, #collection-view-toggle {
   transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
 }
 
-nav.main-nav button:hover, .tab:hover, #collection-view-toggle:hover { border-color: var(--accent); }
+nav.main-nav button:hover, .tab:hover, #collection-view-toggle:hover, #collection-print-labels-btn:hover { border-color: var(--accent); }
 
 nav.main-nav button.active, .tab.active, #collection-view-toggle.active {
   background: var(--accent);
@@ -1280,5 +1280,46 @@ form#add-item-form button[type="submit"]:hover { background: var(--accent-hover)
 }
 
 #showcase-copy-btn:hover { background: var(--accent-hover); }
+
+/* ---------- étiquettes imprimables (QR code) ---------- */
+.label-actions-buttons {
+  display: flex;
+  gap: 0.6rem;
+}
+
+.labels-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 0.75rem;
+}
+
+.label-card {
+  display: flex;
+  gap: 0.7rem;
+  align-items: center;
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  padding: 0.7rem;
+  background: var(--card);
+  break-inside: avoid;
+}
+
+.label-card canvas {
+  width: 72px;
+  height: 72px;
+  flex-shrink: 0;
+  border-radius: 6px;
+}
+
+.label-card .label-info { min-width: 0; }
+.label-card .label-title { font-weight: 700; font-size: 0.85rem; }
+.label-card .label-meta { color: var(--muted); font-size: 0.75rem; }
+
+@media print {
+  body * { visibility: hidden; }
+  #labels-view, #labels-view * { visibility: visible; }
+  #labels-view { position: absolute; top: 0; left: 0; width: 100%; padding: 0; margin: 0; }
+  .label-actions { display: none !important; }
+}
 
 [hidden] { display: none !important; }

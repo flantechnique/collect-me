@@ -4,12 +4,17 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Collect Me</title>
+  <link rel="manifest" href="manifest.webmanifest" />
+  <meta name="theme-color" content="#c96a3f" />
+  <link rel="icon" href="assets/icon-192.png" />
+  <link rel="apple-touch-icon" href="assets/icon-192.png" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Nunito:wght@400;600;700;800&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="assets/style.css" />
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
 </head>
 <body>
   <header>
@@ -91,6 +96,7 @@
         <input id="collection-search" type="text" placeholder="Rechercher dans ma collection..." autocomplete="off" />
         <select id="collection-filter"></select>
         <button id="collection-view-toggle" type="button">🎴 Vue Pokédex</button>
+        <button id="collection-print-labels-btn" type="button">🖨️ Étiquettes</button>
       </div>
       <div id="collection-list"></div>
     </section>
@@ -156,6 +162,18 @@
       <button id="creator-back" type="button" class="tab">← Retour</button>
       <h2 id="creator-title"></h2>
       <div id="creator-list"></div>
+    </section>
+
+    <section id="labels-view" hidden>
+      <div class="showcase-header label-actions">
+        <h2>Étiquettes à imprimer</h2>
+        <div class="label-actions-buttons">
+          <button id="labels-back-btn" type="button" class="tab">← Retour</button>
+          <button id="print-labels-btn" type="button">🖨️ Imprimer</button>
+        </div>
+      </div>
+      <p class="empty label-actions">Chaque étiquette porte un QR code vers la fiche de l'item — pratique à coller sur la boîte, la pochette ou l'étagère.</p>
+      <div id="labels-grid" class="labels-grid"></div>
     </section>
 
     <section id="showcase-view" hidden>
