@@ -9,6 +9,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Nunito:wght@400;600;700;800&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="assets/style.css" />
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js"></script>
 </head>
 <body>
   <header>
@@ -32,9 +33,12 @@
       <h2 id="catalogue-title"></h2>
 
       <div id="external-search" hidden>
-        <div class="search-wrapper">
-          <input id="external-search-input" type="text" placeholder="Rechercher (titre, artiste...)" autocomplete="off" />
-          <div id="external-search-results" class="dropdown-results" hidden></div>
+        <div class="external-search-row">
+          <div class="search-wrapper">
+            <input id="external-search-input" type="text" placeholder="Rechercher (titre, artiste...)" autocomplete="off" />
+            <div id="external-search-results" class="dropdown-results" hidden></div>
+          </div>
+          <button id="barcode-scan-btn" type="button" hidden>📷 Scanner</button>
         </div>
       </div>
 
@@ -49,6 +53,13 @@
             </select>
           </div>
           <div id="catalogue-list"></div>
+
+          <div class="catalogue-import-row">
+            <button id="csv-template-btn" type="button">⬇️ Modèle CSV</button>
+            <button id="csv-import-btn" type="button">⬆️ Importer un CSV</button>
+            <input id="csv-import-input" type="file" accept=".csv,text/csv" hidden />
+          </div>
+          <p id="csv-import-status" class="csv-import-status" hidden></p>
 
           <form id="add-item-form">
             <label>
@@ -96,6 +107,14 @@
   <div id="item-bubble" class="item-bubble" hidden>
     <button id="item-bubble-close" class="item-bubble-close" type="button" aria-label="Fermer">×</button>
     <div id="item-bubble-content"></div>
+  </div>
+
+  <div id="barcode-scanner-modal" class="barcode-scanner-modal" hidden>
+    <div class="barcode-scanner-box">
+      <button id="barcode-scanner-close" type="button" class="barcode-scanner-close" aria-label="Fermer">×</button>
+      <video id="barcode-scanner-video" playsinline muted></video>
+      <p id="barcode-scanner-status" class="barcode-scanner-status">Vise le code-barres avec ta caméra...</p>
+    </div>
   </div>
 
   <script type="module" src="assets/app.js"></script>

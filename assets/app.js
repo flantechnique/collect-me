@@ -47,6 +47,15 @@ const el = {
   catalogueSearch: document.getElementById("catalogue-search"),
   catalogueSort: document.getElementById("catalogue-sort"),
   collectionSearch: document.getElementById("collection-search"),
+  barcodeScanBtn: document.getElementById("barcode-scan-btn"),
+  barcodeScannerModal: document.getElementById("barcode-scanner-modal"),
+  barcodeScannerVideo: document.getElementById("barcode-scanner-video"),
+  barcodeScannerStatus: document.getElementById("barcode-scanner-status"),
+  barcodeScannerClose: document.getElementById("barcode-scanner-close"),
+  csvTemplateBtn: document.getElementById("csv-template-btn"),
+  csvImportBtn: document.getElementById("csv-import-btn"),
+  csvImportInput: document.getElementById("csv-import-input"),
+  csvImportStatus: document.getElementById("csv-import-status"),
 };
 
 let currentDetail = null;
@@ -144,6 +153,16 @@ const CREATOR_ID_KEY = {
   book: "ol_author_id",
   dvd: "tmdb_director_id",
   movie_poster: "tmdb_director_id",
+};
+
+// Catégories pour lesquelles un code-barres scanné (EAN-13/UPC) peut être résolu
+// directement : le "barcode" Discogs pour les disques, l'ISBN (qui EST le code-barres
+// imprimé) pour les livres. Pas de source fiable et gratuite pour jeux vidéo/DVD/affiches,
+// donc le bouton de scan reste masqué pour ces catégories.
+const BARCODE_LOOKUP = {
+  vinyl: { fn: "discogs-search", param: "barcode" },
+  cd: { fn: "discogs-search", param: "barcode" },
+  book: { fn: "openlibrary-search", param: "isbn" },
 };
 
 function creatorIcon(cat) {
@@ -246,6 +265,7 @@ function selectCategory(slug) {
   el.externalSearchResults.hidden = true;
   el.externalSearchResults.innerHTML = "";
   el.externalSearchInput.value = "";
+  el.barcodeScanBtn.hidden = !BARCODE_LOOKUP[slug];
 
   loadCommunityFeed(cat);
   subscribeCommunityFeed(cat);
@@ -752,6 +772,230 @@ function renderExternalResults(results, cat) {
     row.onclick = () => openDetail(r, cat);
     el.externalSearchResults.appendChild(row);
   });
+}
+
+// ---------- scan de code-barres (ZXing, caméra du téléphone/webcam) ----------
+let barcodeReader = null;
+
+el.barcodeScanBtn.addEventListener("click", openBarcodeScanner);
+el.barcodeScannerClose.addEventListener("click", closeBarcodeScanner);
+
+async function openBarcodeScanner() {
+  const cat = currentCategory();
+  const lookup = BARCODE_LOOKUP[cat?.slug];
+  if (!lookup) return;
+
+  if (typeof ZXing === "undefined") {
+    alert("Le lecteur de code-barres n'a pas pu se charger. Vérifie ta connexion et réessaie.");
+    return;
+  }
+
+  el.barcodeScannerModal.hidden = false;
+  el.barcodeScannerStatus.textContent = "Vise le code-barres avec ta caméra...";
+  barcodeReader = new ZXing.BrowserMultiFormatReader();
+
+  try {
+    await barcodeReader.decodeFromVideoDevice(undefined, el.barcodeScannerVideo, (result, err) => {
+      if (result) {
+        const code = result.getText();
+        closeBarcodeScanner();
+        searchByBarcode(code, cat, lookup);
+      }
+      // les erreurs de "pas encore de code détecté" sont normales à chaque frame, on les ignore
+    });
+  } catch (err) {
+    el.barcodeScannerStatus.textContent =
+      "Impossible d'accéder à la caméra. Vérifie les autorisations de ton navigateur.";
+    console.error(err);
+  }
+}
+
+function closeBarcodeScanner() {
+  if (barcodeReader) {
+    barcodeReader.reset();
+    barcodeReader = null;
+  }
+  el.barcodeScannerModal.hidden = true;
+}
+
+async function searchByBarcode(code, cat, lookup) {
+  el.externalSearchInput.value = code;
+  el.externalSearchResults.hidden = false;
+  el.externalSearchResults.innerHTML = "<p class='empty'>Recherche...</p>";
+
+  const { data: { session } } = await sb.auth.getSession();
+  if (!session) {
+    el.externalSearchResults.innerHTML = "<p class='empty'>Connecte-toi pour rechercher.</p>";
+    return;
+  }
+
+  const res = await fetch(
+    `${SUPABASE_URL}/functions/v1/${lookup.fn}?${lookup.param}=${encodeURIComponent(code)}&category_id=${encodeURIComponent(cat.id)}`,
+    { headers: { Authorization: `Bearer ${session.access_token}` } }
+  );
+  const payload = await res.json();
+  if (!res.ok) {
+    el.externalSearchResults.innerHTML = `<p class='empty'>Erreur : ${payload.error ?? res.statusText}</p>`;
+    return;
+  }
+  if (!payload.results?.length) {
+    el.externalSearchResults.innerHTML = `<p class='empty'>Aucun résultat pour le code ${escapeHtml(code)}. Essaie la recherche par titre.</p>`;
+    return;
+  }
+  renderExternalResults(payload.results, cat);
+}
+
+// ---------- import CSV en masse ----------
+el.csvTemplateBtn.addEventListener("click", downloadCsvTemplate);
+el.csvImportBtn.addEventListener("click", () => el.csvImportInput.click());
+el.csvImportInput.addEventListener("change", async () => {
+  const file = el.csvImportInput.files?.[0];
+  el.csvImportInput.value = "";
+  if (file) await importCsv(file);
+});
+
+const CSV_FIXED_COLUMNS = ["titre", "image_url", "statut", "etat", "prix", "date_acquisition", "notes"];
+const CSV_STATUS_LABELS = { owned: "possede", wanted: "recherche", for_sale: "a_vendre" };
+
+function csvColumnsForCategory(cat) {
+  return [...CSV_FIXED_COLUMNS, ...(cat.attribute_schema || []).map((f) => f.key)];
+}
+
+function downloadCsvTemplate() {
+  const cat = currentCategory();
+  if (!cat) return;
+  const columns = csvColumnsForCategory(cat);
+  const exampleRow = columns.map((c) => (c === "statut" ? "possede" : ""));
+  const csv = [columns.join(","), exampleRow.join(",")].join("\r\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `collect-me-modele-${cat.slug}.csv`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+// Parseur CSV minimal mais robuste : gère les champs entre guillemets (avec virgules,
+// guillemets échappés en "" et retours à la ligne à l'intérieur d'un champ).
+function parseCsv(text) {
+  const rows = [];
+  let row = [];
+  let field = "";
+  let inQuotes = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inQuotes) {
+      if (c === '"') {
+        if (text[i + 1] === '"') { field += '"'; i++; }
+        else inQuotes = false;
+      } else {
+        field += c;
+      }
+    } else if (c === '"') {
+      inQuotes = true;
+    } else if (c === ",") {
+      row.push(field);
+      field = "";
+    } else if (c === "\n" || c === "\r") {
+      if (c === "\r" && text[i + 1] === "\n") i++;
+      row.push(field);
+      rows.push(row);
+      row = [];
+      field = "";
+    } else {
+      field += c;
+    }
+  }
+  if (field.length || row.length) {
+    row.push(field);
+    rows.push(row);
+  }
+  if (!rows.length) return [];
+  const headers = rows[0].map((h) => h.trim().toLowerCase());
+  return rows.slice(1)
+    .filter((r) => r.some((v) => v.trim() !== ""))
+    .map((r) => {
+      const obj = {};
+      headers.forEach((h, idx) => { obj[h] = (r[idx] ?? "").trim(); });
+      return obj;
+    });
+}
+
+function parseCsvStatus(raw) {
+  const v = (raw || "").trim().toLowerCase();
+  if (!v) return "owned";
+  if (["owned", "possede", "possédé", "possédée"].includes(v)) return "owned";
+  if (["wanted", "recherche", "recherché", "recherchée"].includes(v)) return "wanted";
+  if (["for_sale", "a_vendre", "à vendre", "a vendre"].includes(v)) return "for_sale";
+  return "owned";
+}
+
+async function importCsv(file) {
+  if (!currentUser) {
+    alert("Connecte-toi pour importer un CSV.");
+    return;
+  }
+  const cat = currentCategory();
+  if (!cat) return;
+
+  const text = await file.text();
+  const rows = parseCsv(text);
+  if (!rows.length) {
+    el.csvImportStatus.hidden = false;
+    el.csvImportStatus.textContent = "Le fichier est vide ou n'a pas pu être lu.";
+    return;
+  }
+
+  const attrKeys = (cat.attribute_schema || []).map((f) => f.key);
+  el.csvImportStatus.hidden = false;
+
+  let added = 0, reused = 0, errors = 0;
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
+    el.csvImportStatus.textContent = `Import en cours... (${i + 1}/${rows.length})`;
+    const title = (r["titre"] || "").trim();
+    if (!title) { errors++; continue; }
+
+    const attributes = {};
+    attrKeys.forEach((k) => { if (r[k]) attributes[k] = r[k]; });
+
+    try {
+      const { item, created } = await findOrCreateItem({
+        cat,
+        title,
+        externalIds: {},
+        attributes,
+        coverImageUrl: r["image_url"] || null,
+        source: "csv_import",
+      });
+      if (created) added++; else reused++;
+
+      const { error: entryError } = await sb.from("collection_entries").insert({
+        item_id: item.id,
+        user_id: currentUser.id,
+        status: parseCsvStatus(r["statut"]),
+        condition: r["etat"] || null,
+        price_paid: r["prix"] ? Number(r["prix"].replace(",", ".")) || null : null,
+        acquired_at: r["date_acquisition"] || null,
+        notes: r["notes"] || null,
+      });
+      if (entryError) throw entryError;
+    } catch (err) {
+      console.error(err);
+      errors++;
+    }
+  }
+
+  el.csvImportStatus.textContent =
+    `Import terminé : ${added} nouvel${added > 1 ? "s" : ""} item${added > 1 ? "s" : ""} créé${added > 1 ? "s" : ""}, ` +
+    `${reused} déjà existant${reused > 1 ? "s" : ""} réutilisé${reused > 1 ? "s" : ""}, ` +
+    `${errors} ligne${errors > 1 ? "s" : ""} en erreur.`;
+
+  loadCatalogue();
+  if (!el.collectionView.hidden) loadMyCollection();
 }
 
 // ---------- helpers ----------
