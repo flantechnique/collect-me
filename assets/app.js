@@ -28,6 +28,8 @@ const el = {
   viewCollectionBtn: document.getElementById("view-collection"),
   homeView: document.getElementById("home-view"),
   homeCategories: document.getElementById("home-categories"),
+  globalSearchInput: document.getElementById("global-search-input"),
+  globalSearchResults: document.getElementById("global-search-results"),
   backToHomeBtn: document.getElementById("back-to-home"),
   catalogueTitle: document.getElementById("catalogue-title"),
   catalogueView: document.getElementById("catalogue-view"),
@@ -71,6 +73,7 @@ const el = {
   statsContent: document.getElementById("stats-content"),
   statsExportCsvBtn: document.getElementById("stats-export-csv-btn"),
   statsExportJsonBtn: document.getElementById("stats-export-json-btn"),
+  statsExportReimportBtn: document.getElementById("stats-export-reimport-btn"),
   collectionViewToggle: document.getElementById("collection-view-toggle"),
   viewFunBtn: document.getElementById("view-fun"),
   funView: document.getElementById("fun-view"),
@@ -79,6 +82,7 @@ const el = {
   compareBtn: document.getElementById("compare-btn"),
   compareResult: document.getElementById("compare-result"),
   digestContent: document.getElementById("digest-content"),
+  wantlistAlertsContent: document.getElementById("wantlist-alerts-content"),
   creatorFollowRow: document.getElementById("creator-follow-row"),
   timelineContent: document.getElementById("timeline-content"),
   rouletteBtn: document.getElementById("roulette-btn"),
@@ -93,7 +97,15 @@ const el = {
   showcaseTitle: document.getElementById("showcase-title"),
   showcaseBio: document.getElementById("showcase-bio"),
   showcaseContent: document.getElementById("showcase-content"),
+  showcaseForsaleSection: document.getElementById("showcase-forsale-section"),
+  showcaseForsaleContent: document.getElementById("showcase-forsale-content"),
   collectionPrintLabelsBtn: document.getElementById("collection-print-labels-btn"),
+  collectionBulkBar: document.getElementById("collection-bulk-bar"),
+  collectionBulkCount: document.getElementById("collection-bulk-count"),
+  collectionBulkStatus: document.getElementById("collection-bulk-status"),
+  collectionBulkApplyBtn: document.getElementById("collection-bulk-apply-btn"),
+  collectionBulkDeleteBtn: document.getElementById("collection-bulk-delete-btn"),
+  collectionBulkClearBtn: document.getElementById("collection-bulk-clear-btn"),
   labelsView: document.getElementById("labels-view"),
   labelsGrid: document.getElementById("labels-grid"),
   labelsBackBtn: document.getElementById("labels-back-btn"),
@@ -411,6 +423,73 @@ function renderHome() {
   });
 }
 
+// ---- recherche globale : toutes catégories confondues, via l'index plein texte serveur
+// (search_vector, tsvector généré sur titre + attributs) — utile dès que le catalogue
+// grossit, plutôt que le filtrage client habituel qui reste scopé à une seule catégorie ----
+let globalSearchDebounceTimer = null;
+let globalSearchToken = 0;
+
+el.globalSearchInput.addEventListener("input", () => {
+  clearTimeout(globalSearchDebounceTimer);
+  const query = el.globalSearchInput.value.trim();
+  if (query.length < 2) {
+    el.globalSearchResults.hidden = true;
+    el.globalSearchResults.innerHTML = "";
+    return;
+  }
+  globalSearchDebounceTimer = setTimeout(runGlobalSearch, 350);
+});
+
+document.addEventListener("click", (e) => {
+  if (!el.globalSearchInput.parentElement.contains(e.target)) {
+    el.globalSearchResults.hidden = true;
+  }
+});
+
+async function runGlobalSearch() {
+  const query = el.globalSearchInput.value.trim();
+  if (query.length < 2) return;
+  const token = ++globalSearchToken;
+
+  el.globalSearchResults.hidden = false;
+  el.globalSearchResults.innerHTML = "<p class='empty'>Recherche...</p>";
+
+  // websearch_to_tsquery gère naturellement plusieurs mots ; en repli, une recherche ilike
+  // sur le titre pour les requêtes trop courtes/partielles qu'une tsquery mots-entiers loupe
+  const [{ data: ftsResults }, { data: ilikeResults }] = await Promise.all([
+    sb.from("items").select("*, categories(*)").textSearch("search_vector", query, { type: "websearch", config: "french" }).limit(15),
+    sb.from("items").select("*, categories(*)").ilike("title", `%${query}%`).limit(15),
+  ]);
+  if (token !== globalSearchToken) return;
+
+  const merged = [...new Map([...(ftsResults ?? []), ...(ilikeResults ?? [])].map((i) => [i.id, i])).values()].slice(0, 15);
+
+  if (!merged.length) {
+    el.globalSearchResults.innerHTML = "<p class='empty'>Aucun résultat dans le catalogue.</p>";
+    return;
+  }
+
+  el.globalSearchResults.innerHTML = "";
+  merged.forEach((item) => {
+    const row = document.createElement("div");
+    row.className = "search-result-row";
+    row.innerHTML = `
+      <img src="${item.cover_image_url ?? ""}" alt="" onerror="this.style.visibility='hidden'" />
+      <div class="info">
+        <span class="r-title">${escapeHtml(item.title)}</span>
+        <span class="r-meta">${item.categories.icon ?? ""} ${escapeHtml(item.categories.name)}</span>
+      </div>
+    `;
+    row.addEventListener("click", () => {
+      el.globalSearchResults.hidden = true;
+      el.globalSearchInput.value = "";
+      selectCategory(item.categories.slug);
+      openItemDetail(item, item.categories);
+    });
+    el.globalSearchResults.appendChild(row);
+  });
+}
+
 function currentCategory() {
   return categories.find((c) => c.slug === activeCategorySlug);
 }
@@ -637,6 +716,10 @@ async function addToCollection(itemId, status) {
   loadMyCollection();
 };
 
+// ---- édition en masse : sélection de plusieurs groupes (item+statut) à la fois ----
+let bulkSelection = new Set(); // clés "item_id:status"
+let lastRenderedGroups = new Map(); // clé -> { item, status, entryIds }
+
 async function loadMyCollection() {
   if (!currentUser) {
     el.collectionList.innerHTML = "<p class='empty'>Connecte-toi pour voir ta collection.</p>";
@@ -667,6 +750,9 @@ async function loadMyCollection() {
     el.collectionList.innerHTML = data.length
       ? "<p class='empty'>Aucun item ne correspond.</p>"
       : "<p class='empty'>Rien ici pour l'instant.</p>";
+    lastRenderedGroups = new Map();
+    bulkSelection.clear();
+    el.collectionBulkBar.hidden = true;
     return;
   }
 
@@ -680,11 +766,16 @@ async function loadMyCollection() {
     }
     groups.get(key).entryIds.push(entry.id);
   });
+  lastRenderedGroups = groups;
+  // on ne garde en sélection que les clés encore présentes (ex: après un changement de filtre)
+  bulkSelection = new Set([...bulkSelection].filter((k) => groups.has(k)));
 
   if (collectionViewMode === "pokedex") {
+    el.collectionBulkBar.hidden = true;
     renderCollectionPokedex([...groups.values()]);
     return;
   }
+  updateBulkBar();
 
   // regroupement par catégorie (trié par type) — masqué quand un filtre de catégorie est actif
   const byCategory = new Map();
@@ -732,9 +823,11 @@ function renderCollectionPokedex(groups) {
 
 function renderCollectionGroup(group) {
   const { item, status, entryIds } = group;
+  const key = `${item.id}:${status}`;
   const card = document.createElement("div");
   card.className = "card";
   card.innerHTML = `
+    <input type="checkbox" class="card-select-checkbox" aria-label="Sélectionner pour édition en masse" ${bulkSelection.has(key) ? "checked" : ""} />
     <div class="card-visual">
       <img class="card-thumb" src="${item.cover_image_url ?? ""}" alt="" onerror="this.style.visibility='hidden'" />
       <div class="card-visual-info">
@@ -744,6 +837,13 @@ function renderCollectionGroup(group) {
       </div>
     </div>
   `;
+  const selectCheckbox = card.querySelector(".card-select-checkbox");
+  selectCheckbox.addEventListener("click", (e) => e.stopPropagation());
+  selectCheckbox.addEventListener("change", (e) => {
+    if (e.target.checked) bulkSelection.add(key);
+    else bulkSelection.delete(key);
+    updateBulkBar();
+  });
 
   const actions = document.createElement("div");
   actions.className = "actions";
@@ -780,6 +880,23 @@ function renderCollectionGroup(group) {
   };
   actions.appendChild(labelBtn);
 
+  if (status === "owned" || status === "for_sale") {
+    const saleBtn = document.createElement("button");
+    saleBtn.textContent = status === "for_sale" ? "↩️ Retirer de la vente" : "💰 Mettre en vente";
+    saleBtn.onclick = async (e) => {
+      e.stopPropagation();
+      const entryId = entryIds[entryIds.length - 1];
+      const newStatus = status === "for_sale" ? "owned" : "for_sale";
+      const { error } = await sb
+        .from("collection_entries")
+        .update({ status: newStatus, ...(newStatus === "owned" ? { asking_price: null } : {}) })
+        .eq("id", entryId);
+      if (error) return alert(error.message);
+      loadMyCollection();
+    };
+    actions.appendChild(saleBtn);
+  }
+
   card.appendChild(actions);
   attachItemBubble(card, item, item.categories);
   return card;
@@ -790,6 +907,43 @@ async function removeCollectionEntry(entryId) {
   if (error) return alert(error.message);
   loadMyCollection();
 }
+
+// ---- édition en masse : barre d'actions groupées, applique aux TOUS les exemplaires des
+// groupes (item+statut) sélectionnés d'un coup ----
+function updateBulkBar() {
+  el.collectionBulkBar.hidden = bulkSelection.size === 0;
+  const totalEntries = [...bulkSelection].reduce((sum, key) => sum + (lastRenderedGroups.get(key)?.entryIds.length ?? 0), 0);
+  el.collectionBulkCount.textContent = `${bulkSelection.size} groupe${bulkSelection.size > 1 ? "s" : ""} sélectionné${bulkSelection.size > 1 ? "s" : ""} (${totalEntries} exemplaire${totalEntries > 1 ? "s" : ""})`;
+}
+
+function bulkSelectedEntryIds() {
+  return [...bulkSelection].flatMap((key) => lastRenderedGroups.get(key)?.entryIds ?? []);
+}
+
+el.collectionBulkApplyBtn.addEventListener("click", async () => {
+  const ids = bulkSelectedEntryIds();
+  if (!ids.length) return;
+  const newStatus = el.collectionBulkStatus.value;
+  const { error } = await sb.from("collection_entries").update({ status: newStatus }).in("id", ids);
+  if (error) return alert(error.message);
+  bulkSelection.clear();
+  loadMyCollection();
+});
+
+el.collectionBulkDeleteBtn.addEventListener("click", async () => {
+  const ids = bulkSelectedEntryIds();
+  if (!ids.length) return;
+  if (!confirm(`Supprimer ${ids.length} exemplaire${ids.length > 1 ? "s" : ""} de ta collection ?`)) return;
+  const { error } = await sb.from("collection_entries").delete().in("id", ids);
+  if (error) return alert(error.message);
+  bulkSelection.clear();
+  loadMyCollection();
+});
+
+el.collectionBulkClearBtn.addEventListener("click", () => {
+  bulkSelection.clear();
+  loadMyCollection();
+});
 
 // ---------- détails d'un exemplaire (état, prix payé, date d'acquisition, notes) ----------
 // Sur un groupe avec doublons, agit sur l'exemplaire le plus récemment ajouté — cohérent
@@ -817,6 +971,9 @@ async function toggleEntryDetailsForm(card, entryId) {
     <label>Prix payé (€)
       <input name="price_paid" type="number" step="0.01" min="0" value="${entry.price_paid ?? ""}" />
     </label>
+    ${entry.status === "for_sale" ? `<label>Prix demandé (€)
+      <input name="asking_price" type="number" step="0.01" min="0" value="${entry.asking_price ?? ""}" />
+    </label>` : ""}
     <label>Date d'acquisition
       <input name="acquired_at" type="date" value="${entry.acquired_at ?? ""}" />
     </label>
@@ -872,6 +1029,7 @@ async function toggleEntryDetailsForm(card, entryId) {
       .update({
         condition: fd.get("condition")?.trim() || null,
         price_paid: fd.get("price_paid") || null,
+        ...(entry.status === "for_sale" ? { asking_price: fd.get("asking_price") || null } : {}),
         acquired_at: fd.get("acquired_at") || null,
         notes: fd.get("notes")?.trim() || null,
       })
@@ -1509,6 +1667,7 @@ function buildStatsBarSection(title, pairs) {
 // ---------- export de la collection (sauvegarde/analyse externe) ----------
 el.statsExportCsvBtn.addEventListener("click", exportCollectionCsv);
 el.statsExportJsonBtn.addEventListener("click", exportCollectionJson);
+el.statsExportReimportBtn.addEventListener("click", exportReimportableCsv);
 
 function triggerDownload(content, filename, mime) {
   const blob = new Blob([content], { type: mime });
@@ -1560,6 +1719,41 @@ function exportCollectionJson() {
   triggerDownload(JSON.stringify(data, null, 2), "ma-collection.json", "application/json;charset=utf-8;");
 }
 
+// export "réimportable" : un fichier CSV par catégorie, exactement dans le format attendu
+// par l'import (mêmes colonnes que downloadCsvTemplate, mêmes codes de statut) — permet un
+// aller-retour propre, y compris entre deux instances de Collect Me
+function exportReimportableCsv() {
+  if (!collectionEntriesCache.length) return;
+  const byCategory = new Map(); // slug -> { cat, rows }
+  collectionEntriesCache.forEach((e) => {
+    const cat = e.items.categories;
+    if (!byCategory.has(cat.slug)) byCategory.set(cat.slug, { cat, rows: [] });
+    byCategory.get(cat.slug).rows.push(e);
+  });
+
+  let delay = 0;
+  byCategory.forEach(({ cat, rows }) => {
+    const columns = csvColumnsForCategory(cat);
+    const csvRows = rows.map((e) =>
+      columns.map((c) => {
+        if (c === "titre") return e.items.title;
+        if (c === "image_url") return e.items.cover_image_url ?? "";
+        if (c === "statut") return CSV_STATUS_LABELS[e.status] ?? e.status;
+        if (c === "etat") return e.condition ?? "";
+        if (c === "prix") return e.price_paid ?? "";
+        if (c === "date_acquisition") return e.acquired_at ?? "";
+        if (c === "notes") return e.notes ?? "";
+        return e.items.attributes?.[c] ?? "";
+      })
+    );
+    const csv = [columns.join(","), ...csvRows.map((r) => r.map(csvEscape).join(","))].join("\r\n");
+    // léger décalage entre chaque téléchargement : la plupart des navigateurs bloquent
+    // plusieurs déclenchements de téléchargement strictement simultanés
+    setTimeout(() => triggerDownload(csv, `collect-me-export-${cat.slug}.csv`, "text/csv;charset=utf-8;"), delay);
+    delay += 300;
+  });
+}
+
 // ---------- "Découvrir" : frise chronologique, roulette, badges, quiz tracklist ----------
 async function loadFunView() {
   if (!currentUser) {
@@ -1572,6 +1766,7 @@ async function loadFunView() {
   el.timelineContent.innerHTML = "<p class='empty'>Chargement...</p>";
   const entries = await fetchCollectionEntries();
   loadCreatorDigest(entries);
+  renderWantlistAlerts(entries);
   renderRecommendations(entries);
   renderTimeline(entries);
   renderBadges(entries);
@@ -1677,6 +1872,50 @@ async function loadCreatorDigest(entries) {
     return;
   }
   sections.forEach((s) => el.digestContent.appendChild(s));
+}
+
+// ---- alertes wantlist : croise les items "recherchés" avec public_for_sale_items (les
+// vendeurs ayant activé leur vitrine publique), sans jamais toucher aux collections privées
+// d'autrui — seulement ce que chacun a lui-même choisi de rendre visible ----
+async function renderWantlistAlerts(entries) {
+  const wanted = entries.filter((e) => e.status === "wanted");
+  if (!wanted.length) {
+    el.wantlistAlertsContent.innerHTML = "<p class='empty'>Ajoute des items à ta wantlist pour être alerté·e s'ils apparaissent à la vente.</p>";
+    return;
+  }
+  el.wantlistAlertsContent.innerHTML = "<p class='empty'>Recherche en cours...</p>";
+  const wantedIds = [...new Set(wanted.map((e) => e.item_id))];
+  const { data: matches, error } = await sb
+    .from("public_for_sale_items")
+    .select("*")
+    .in("item_id", wantedIds)
+    .neq("user_id", currentUser.id);
+
+  if (error || !matches?.length) {
+    el.wantlistAlertsContent.innerHTML = "<p class='empty'>Rien à la vente pour l'instant parmi tes items recherchés.</p>";
+    return;
+  }
+
+  el.wantlistAlertsContent.innerHTML = `<p>${matches.length} item${matches.length > 1 ? "s" : ""} de ta wantlist ${matches.length > 1 ? "sont" : "est"} à la vente :</p>`;
+  const grid = document.createElement("div");
+  grid.className = "pokedex-grid";
+  matches.forEach((item) => {
+    const sellerLink = item.seller_username ? `?u=${item.seller_username}` : `?showcase=${item.user_id}`;
+    const sellerName = item.seller_username ? `@${item.seller_username}` : (item.seller_display_name || "un·e collectionneur·se");
+    const card = document.createElement("a");
+    card.href = sellerLink;
+    card.target = "_blank";
+    card.rel = "noopener";
+    card.className = "pokedex-card owned";
+    card.innerHTML = `
+      <img src="${item.cover_image_url ?? ""}" alt="" onerror="this.style.visibility='hidden'" />
+      <div class="pokedex-title">${item.category_icon ?? ""} ${escapeHtml(item.title)}</div>
+      <p class="empty recommendation-reason">${item.asking_price ? `${item.asking_price} € — ` : ""}chez ${escapeHtml(sellerName)}</p>
+    `;
+    grid.appendChild(card);
+  });
+  el.wantlistAlertsContent.innerHTML = "";
+  el.wantlistAlertsContent.appendChild(grid);
 }
 
 // ---- comparer sa collection avec celle d'un ami : repose sur la vitrine publique de l'ami
@@ -2098,10 +2337,30 @@ async function renderPublicShowcase({ userId, username }) {
     el.showcaseBanner.hidden = true;
   }
 
-  const { data: items, error } = await sb
-    .from("public_showcase_items")
-    .select("*")
-    .eq("user_id", userId);
+  const [{ data: items, error }, { data: forSaleItems }] = await Promise.all([
+    sb.from("public_showcase_items").select("*").eq("user_id", userId),
+    sb.from("public_for_sale_items").select("*").eq("user_id", userId),
+  ]);
+
+  if (forSaleItems?.length) {
+    el.showcaseForsaleSection.hidden = false;
+    const forSaleGrid = document.createElement("div");
+    forSaleGrid.className = "pokedex-grid";
+    forSaleItems.forEach((item) => {
+      const card = document.createElement("div");
+      card.className = "pokedex-card owned";
+      card.innerHTML = `
+        <img src="${item.cover_image_url ?? ""}" alt="" onerror="this.style.visibility='hidden'" />
+        <div class="pokedex-title">${item.category_icon ?? ""} ${escapeHtml(item.title)}</div>
+        ${item.asking_price ? `<p class="empty recommendation-reason">${item.asking_price} €</p>` : ""}
+      `;
+      forSaleGrid.appendChild(card);
+    });
+    el.showcaseForsaleContent.innerHTML = "";
+    el.showcaseForsaleContent.appendChild(forSaleGrid);
+  } else {
+    el.showcaseForsaleSection.hidden = true;
+  }
 
   if (error || !items?.length) {
     el.showcaseContent.innerHTML = "<p class='empty'>Rien à montrer pour l'instant.</p>";

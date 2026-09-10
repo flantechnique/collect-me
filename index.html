@@ -31,6 +31,10 @@
 
   <main>
     <section id="home-view">
+      <div class="search-wrapper home-global-search">
+        <input id="global-search-input" type="text" placeholder="🔍 Rechercher dans tout le catalogue (toutes catégories)..." autocomplete="off" />
+        <div id="global-search-results" class="dropdown-results" hidden></div>
+      </div>
       <h2>Que veux-tu consulter aujourd'hui ?</h2>
       <div id="home-categories"></div>
     </section>
@@ -98,6 +102,17 @@
         <button id="collection-view-toggle" type="button">🎴 Vue Pokédex</button>
         <button id="collection-print-labels-btn" type="button">🖨️ Étiquettes</button>
       </div>
+      <div id="collection-bulk-bar" class="collection-bulk-bar" hidden>
+        <span id="collection-bulk-count"></span>
+        <select id="collection-bulk-status">
+          <option value="owned">Possédé</option>
+          <option value="wanted">Recherché</option>
+          <option value="for_sale">À vendre</option>
+        </select>
+        <button id="collection-bulk-apply-btn" type="button">Changer le statut</button>
+        <button id="collection-bulk-delete-btn" type="button">Supprimer la sélection</button>
+        <button id="collection-bulk-clear-btn" type="button">Tout désélectionner</button>
+      </div>
       <div id="collection-list"></div>
     </section>
 
@@ -107,6 +122,7 @@
       <div class="stats-export-row">
         <button id="stats-export-csv-btn" type="button">⬇️ Exporter en CSV</button>
         <button id="stats-export-json-btn" type="button">⬇️ Exporter en JSON</button>
+        <button id="stats-export-reimport-btn" type="button" title="Un fichier par catégorie, au format exact du modèle d'import — pour ré-importer telle quelle ailleurs">⬇️ Export réimportable</button>
       </div>
     </section>
 
@@ -118,6 +134,11 @@
       <div class="stats-section">
         <h3>🔔 Nouveautés de mes créateurs suivis</h3>
         <div id="digest-content"></div>
+      </div>
+
+      <div class="stats-section">
+        <h3>💸 Alertes wantlist</h3>
+        <div id="wantlist-alerts-content"></div>
       </div>
 
       <div class="stats-section">
@@ -270,7 +291,16 @@
         </div>
         <a href="./" class="tab">← Retour à Collect Me</a>
       </div>
-      <div id="showcase-content"></div>
+
+      <div id="showcase-forsale-section" class="stats-section" hidden>
+        <h3>🛒 À vendre</h3>
+        <div id="showcase-forsale-content"></div>
+      </div>
+
+      <div class="stats-section">
+        <h3>📚 Collection</h3>
+        <div id="showcase-content"></div>
+      </div>
     </section>
   </main>
 
