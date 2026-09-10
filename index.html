@@ -23,9 +23,10 @@
       <div id="category-tabs"></div>
 
       <div id="external-search" hidden>
-        <input id="external-search-input" type="text" placeholder="Rechercher (titre, artiste...)" />
-        <button id="external-search-btn" type="button">Rechercher</button>
-        <div id="external-search-results"></div>
+        <div class="search-wrapper">
+          <input id="external-search-input" type="text" placeholder="Rechercher (titre, artiste...)" autocomplete="off" />
+          <div id="external-search-results" class="dropdown-results" hidden></div>
+        </div>
       </div>
 
       <div id="catalogue-list"></div>

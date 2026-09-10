@@ -23,7 +23,6 @@ const el = {
   collectionFilter: document.getElementById("collection-filter"),
   externalSearch: document.getElementById("external-search"),
   externalSearchInput: document.getElementById("external-search-input"),
-  externalSearchBtn: document.getElementById("external-search-btn"),
   externalSearchResults: document.getElementById("external-search-results"),
 };
 
@@ -129,6 +128,7 @@ function selectCategory(slug) {
 
   const hasExternalSearch = Boolean(CATEGORY_SEARCH_FUNCTIONS[slug]);
   el.externalSearch.hidden = !hasExternalSearch;
+  el.externalSearchResults.hidden = true;
   el.externalSearchResults.innerHTML = "";
   el.externalSearchInput.value = "";
 }
@@ -297,25 +297,55 @@ function switchView(view) {
   if (view === "collection") loadMyCollection();
 }
 
-// ---------- recherche externe (Discogs, IGDB...) ----------
+// ---------- recherche externe (Discogs, RAWG...) — dropdown en live ----------
+let searchDebounceTimer = null;
+let searchToken = 0;
+
+el.externalSearchInput.addEventListener("input", () => {
+  clearTimeout(searchDebounceTimer);
+  const query = el.externalSearchInput.value.trim();
+  if (query.length < 2) {
+    el.externalSearchResults.hidden = true;
+    el.externalSearchResults.innerHTML = "";
+    return;
+  }
+  searchDebounceTimer = setTimeout(searchExternal, 350);
+});
+
+// referme le dropdown si on clique ailleurs
+document.addEventListener("click", (e) => {
+  if (!el.externalSearch.contains(e.target)) {
+    el.externalSearchResults.hidden = true;
+  }
+});
+
 async function searchExternal() {
   const cat = currentCategory();
-  const fnName = CATEGORY_SEARCH_FUNCTIONS[cat.slug];
+  const fnName = CATEGORY_SEARCH_FUNCTIONS[cat?.slug];
   const query = el.externalSearchInput.value.trim();
-  if (!fnName || !query) return;
+  if (!fnName || query.length < 2) return;
+
+  const token = ++searchToken;
 
   const { data: { session } } = await sb.auth.getSession();
   if (!session) {
-    alert("Connecte-toi pour rechercher.");
+    el.externalSearchResults.hidden = false;
+    el.externalSearchResults.innerHTML = "<p class='empty'>Connecte-toi pour rechercher.</p>";
     return;
   }
 
+  el.externalSearchResults.hidden = false;
   el.externalSearchResults.innerHTML = "<p class='empty'>Recherche...</p>";
+
   const res = await fetch(
     `${SUPABASE_URL}/functions/v1/${fnName}?q=${encodeURIComponent(query)}`,
     { headers: { Authorization: `Bearer ${session.access_token}` } }
   );
   const payload = await res.json();
+
+  // une frappe plus récente a déjà relancé une recherche : on ignore cette réponse
+  if (token !== searchToken) return;
+
   if (!res.ok) {
     el.externalSearchResults.innerHTML = `<p class='empty'>Erreur : ${payload.error ?? res.statusText}</p>`;
     return;
@@ -332,32 +362,30 @@ function renderExternalResults(results, cat) {
   const mapper = CATEGORY_RESULT_MAPPERS[cat.slug];
   results.forEach((r) => {
     const { attributes } = mapper(r);
+    const meta = (cat.attribute_schema || [])
+      .map((field) => attributes[field.key])
+      .filter(Boolean)
+      .join(" · ");
 
-    const card = document.createElement("div");
-    card.className = "card";
+    const row = document.createElement("div");
+    row.className = "search-result-row";
 
-    const title = document.createElement("h3");
-    title.textContent = r.title;
-    card.appendChild(title);
+    const img = document.createElement("img");
+    img.src = r.cover_image ?? "";
+    img.alt = "";
+    img.onerror = () => { img.style.visibility = "hidden"; };
+    row.appendChild(img);
 
-    const attrs = document.createElement("ul");
-    attrs.className = "attrs";
-    (cat.attribute_schema || []).forEach((field) => {
-      const val = attributes[field.key];
-      if (val) {
-        const li = document.createElement("li");
-        li.textContent = `${field.label} : ${val}`;
-        attrs.appendChild(li);
-      }
-    });
-    card.appendChild(attrs);
+    const info = document.createElement("div");
+    info.className = "info";
+    info.innerHTML = `
+      <span class="r-title">${r.title}</span>
+      <span class="r-meta">${meta}</span>
+    `;
+    row.appendChild(info);
 
-    const btn = document.createElement("button");
-    btn.textContent = "Importer dans le catalogue";
-    btn.onclick = () => importExternalResult(r, cat);
-    card.appendChild(btn);
-
-    el.externalSearchResults.appendChild(card);
+    row.onclick = () => importExternalResult(r, cat);
+    el.externalSearchResults.appendChild(row);
   });
 }
 
@@ -381,19 +409,12 @@ async function importExternalResult(r, cat) {
 
   if (error) return alert(error.message);
 
+  el.externalSearchResults.hidden = true;
   el.externalSearchResults.innerHTML = "";
   el.externalSearchInput.value = "";
   loadCatalogue();
   addToCollection(data.id, "owned");
 }
-
-el.externalSearchBtn.addEventListener("click", searchExternal);
-el.externalSearchInput.addEventListener("keydown", (e) => {
-  if (e.key === "Enter") {
-    e.preventDefault();
-    searchExternal();
-  }
-});
 
 // ---------- boot ----------
 initAuth();
