@@ -31,6 +31,29 @@ const el = {
 // Ajouter une entrée ici active automatiquement le bloc de recherche pour la catégorie.
 const CATEGORY_SEARCH_FUNCTIONS = {
   vinyl: "discogs-search",
+  video_game: "rawg-search",
+};
+
+// Pour chaque catégorie avec recherche externe : comment transformer un résultat
+// brut de l'API (voir la edge function correspondante) en { externalIds, attributes }
+// compatibles avec le attribute_schema de la catégorie.
+const CATEGORY_RESULT_MAPPERS = {
+  vinyl: (r) => ({
+    externalIds: { discogs_id: r.discogs_id },
+    attributes: {
+      ...(r.label && { label: r.label }),
+      ...(r.year && { pressing_year: r.year }),
+      ...(r.format && { format: r.format }),
+    },
+  }),
+  video_game: (r) => ({
+    externalIds: { rawg_id: r.rawg_id },
+    attributes: {
+      ...(r.platform && { platform: r.platform }),
+      ...(r.genre && { genre: r.genre }),
+      ...(r.year && { release_year: r.year }),
+    },
+  }),
 };
 
 // ---------- auth ----------
@@ -306,30 +329,41 @@ function renderExternalResults(results, cat) {
     el.externalSearchResults.innerHTML = "<p class='empty'>Aucun résultat.</p>";
     return;
   }
+  const mapper = CATEGORY_RESULT_MAPPERS[cat.slug];
   results.forEach((r) => {
+    const { attributes } = mapper(r);
+
     const card = document.createElement("div");
     card.className = "card";
-    card.innerHTML = `
-      <h3>${r.title}</h3>
-      <ul class="attrs">
-        ${r.label ? `<li>Label : ${r.label}</li>` : ""}
-        ${r.year ? `<li>Année : ${r.year}</li>` : ""}
-        ${r.format ? `<li>Format : ${r.format}</li>` : ""}
-      </ul>
-    `;
+
+    const title = document.createElement("h3");
+    title.textContent = r.title;
+    card.appendChild(title);
+
+    const attrs = document.createElement("ul");
+    attrs.className = "attrs";
+    (cat.attribute_schema || []).forEach((field) => {
+      const val = attributes[field.key];
+      if (val) {
+        const li = document.createElement("li");
+        li.textContent = `${field.label} : ${val}`;
+        attrs.appendChild(li);
+      }
+    });
+    card.appendChild(attrs);
+
     const btn = document.createElement("button");
     btn.textContent = "Importer dans le catalogue";
     btn.onclick = () => importExternalResult(r, cat);
     card.appendChild(btn);
+
     el.externalSearchResults.appendChild(card);
   });
 }
 
 async function importExternalResult(r, cat) {
-  const attributes = {};
-  if (r.label) attributes.label = r.label;
-  if (r.year) attributes.pressing_year = r.year;
-  if (r.format) attributes.format = r.format;
+  const mapper = CATEGORY_RESULT_MAPPERS[cat.slug];
+  const { attributes, externalIds } = mapper(r);
 
   const { data, error } = await sb
     .from("items")
@@ -337,7 +371,7 @@ async function importExternalResult(r, cat) {
       category_id: cat.id,
       title: r.title,
       cover_image_url: r.cover_image ?? null,
-      external_ids: { discogs_id: r.discogs_id },
+      external_ids: externalIds,
       attributes,
       source: "external_api",
       created_by: currentUser.id,
