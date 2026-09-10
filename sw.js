@@ -1,4 +1,4 @@
-// Service worker "Collect Me" : rend le site installable et consultable hors-ligne.
+// Service worker "Glanure" : rend le site installable et consultable hors-ligne.
 //
 // Deux stratégies distinctes :
 // - App shell (HTML/CSS/JS/icônes, même origine) : cache en priorité, réseau en secours —
