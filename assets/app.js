@@ -264,9 +264,22 @@ function renderItemCard(item, cat) {
   const card = document.createElement("div");
   card.className = "card";
 
+  const body = document.createElement("div");
+  body.className = "card-visual";
+
+  const img = document.createElement("img");
+  img.className = "card-thumb";
+  img.src = item.cover_image_url ?? "";
+  img.alt = "";
+  img.onerror = () => { img.style.visibility = "hidden"; };
+  body.appendChild(img);
+
+  const info = document.createElement("div");
+  info.className = "card-visual-info";
+
   const title = document.createElement("h3");
   title.textContent = item.title;
-  card.appendChild(title);
+  info.appendChild(title);
 
   const attrs = document.createElement("ul");
   attrs.className = "attrs";
@@ -289,7 +302,10 @@ function renderItemCard(item, cat) {
     }
     attrs.appendChild(li);
   });
-  card.appendChild(attrs);
+  info.appendChild(attrs);
+
+  body.appendChild(info);
+  card.appendChild(body);
 
   if (currentUser) {
     const actions = document.createElement("div");
@@ -436,9 +452,9 @@ function renderCollectionGroup(group) {
   const card = document.createElement("div");
   card.className = "card";
   card.innerHTML = `
-    <div class="collection-card-body">
-      <img class="collection-cover" src="${item.cover_image_url ?? ""}" alt="" onerror="this.style.visibility='hidden'" />
-      <div class="collection-card-info">
+    <div class="card-visual">
+      <img class="card-thumb" src="${item.cover_image_url ?? ""}" alt="" onerror="this.style.visibility='hidden'" />
+      <div class="card-visual-info">
         <h3>${item.categories.icon ?? ""} ${escapeHtml(item.title)}</h3>
         <p class="status status-${status}">${statusLabel(status)}</p>
         <p class="collection-qty">${entryIds.length} exemplaire${entryIds.length > 1 ? "s" : ""}</p>
