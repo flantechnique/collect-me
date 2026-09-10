@@ -24,6 +24,10 @@ Dans le dashboard Supabase du projet `collect-me` → **Authentication → Provi
 
 (Comme pour Top YouTube, ces identifiants Google sont à créer une fois puis réutilisables.)
 
+### 1bis. Connexion email + mot de passe (profil façon Discogs/Letterboxd)
+
+En plus de Google, le site propose désormais une connexion par email + mot de passe, et un profil personnalisable (pseudo, avatar, bannière, bio, page publique `?u=<pseudo>`). Le provider "Email" est activé par défaut sur un projet Supabase — rien à configurer sauf si tu veux ajuster **Authentication → Providers → Email** (ex. désactiver la confirmation par email pour des tests plus rapides) ou activer **Authentication → Providers → Email → Leaked password protection** (recommandé maintenant que des mots de passe existent ; nécessite un plan Supabase Pro ou plus).
+
 ### 2. Déployer sur GitHub Pages
 
 ```bash

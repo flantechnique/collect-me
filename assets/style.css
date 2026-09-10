@@ -1247,14 +1247,14 @@ form#add-item-form button[type="submit"]:hover { background: var(--accent-hover)
 
 .showcase-toggle input { width: 1.1rem; height: 1.1rem; }
 
-#showcase-link-row {
+#account-link-row {
   display: flex;
   gap: 0.6rem;
   margin-top: 0.9rem;
   flex-wrap: wrap;
 }
 
-#showcase-link-input {
+#account-link-input {
   flex: 1;
   min-width: 200px;
   padding: 0.5rem 0.8rem;
@@ -1266,7 +1266,7 @@ form#add-item-form button[type="submit"]:hover { background: var(--accent-hover)
   font-size: 0.85rem;
 }
 
-#showcase-copy-btn {
+#account-link-copy-btn {
   background: var(--accent);
   color: #fff8f0;
   border: none;
@@ -1279,7 +1279,236 @@ form#add-item-form button[type="submit"]:hover { background: var(--accent-hover)
   transition: background 0.15s ease;
 }
 
-#showcase-copy-btn:hover { background: var(--accent-hover); }
+#account-link-copy-btn:hover { background: var(--accent-hover); }
+
+/* ---------- page publique : avatar/bannière/bio ---------- */
+.showcase-banner {
+  width: 100%;
+  height: 160px;
+  border-radius: 16px;
+  overflow: hidden;
+  margin-bottom: -3rem;
+  background: var(--bg-soft);
+}
+
+.showcase-banner img { width: 100%; height: 100%; object-fit: cover; }
+
+.showcase-identity {
+  display: flex;
+  align-items: flex-end;
+  gap: 1rem;
+}
+
+.showcase-avatar {
+  width: 84px;
+  height: 84px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 4px solid var(--bg);
+  background: var(--bg-soft);
+  box-shadow: 0 6px 16px rgba(58, 46, 34, 0.18);
+  flex-shrink: 0;
+}
+
+.showcase-bio {
+  margin: 0.2rem 0 0;
+  max-width: 46ch;
+}
+
+/* ---------- "Mon compte" : profil public + connexion ---------- */
+.fun-account-hint { margin-bottom: 1.1rem; }
+
+.link-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--accent);
+  font-weight: 700;
+  cursor: pointer;
+  font-family: "Nunito", sans-serif;
+  font-size: inherit;
+  text-decoration: underline;
+}
+
+.link-btn:hover { color: var(--accent-hover); }
+
+.account-images-row {
+  display: flex;
+  gap: 1.5rem;
+  flex-wrap: wrap;
+  margin: 0.9rem 0 1.2rem;
+}
+
+.account-image-field {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.account-avatar-preview {
+  width: 84px;
+  height: 84px;
+  border-radius: 50%;
+  overflow: hidden;
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
+}
+
+.account-avatar-preview img,
+.account-banner-preview img { width: 100%; height: 100%; object-fit: cover; }
+
+.account-image-field-banner { flex: 1; min-width: 200px; align-items: stretch; }
+
+.account-banner-preview {
+  width: 100%;
+  height: 84px;
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
+}
+
+.account-upload-label {
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--accent);
+  cursor: pointer;
+  text-align: center;
+}
+
+.account-upload-label:hover { color: var(--accent-hover); }
+
+#account-profile-form,
+#account-password-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.9rem;
+}
+
+#account-profile-form label,
+#account-password-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--muted);
+  flex: 1;
+  min-width: 200px;
+}
+
+#account-profile-form label.full-width { flex-basis: 100%; }
+
+#account-profile-form input,
+#account-profile-form textarea,
+#account-password-form input {
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--text);
+  padding: 0.5rem 0.7rem;
+  font-family: "Nunito", sans-serif;
+  font-weight: 400;
+}
+
+#account-profile-form textarea { min-height: 70px; resize: vertical; }
+#account-profile-form .actions,
+#account-password-form .actions { flex-basis: 100%; }
+
+.account-username-status {
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.account-username-status.ok { color: #3a7d44; }
+.account-username-status.taken { color: var(--accent); }
+
+#account-auth-methods { margin-top: 0; }
+
+/* ---------- modale de connexion email/mot de passe ---------- */
+.auth-modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(20, 14, 8, 0.72);
+  z-index: 90;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+}
+
+.auth-modal-box {
+  background: var(--card);
+  border-radius: 16px;
+  padding: 1.5rem;
+  max-width: 380px;
+  width: 100%;
+  position: relative;
+  box-shadow: 0 20px 44px rgba(0, 0, 0, 0.35);
+}
+
+.auth-modal-box h3 { margin: 0 0 1rem; }
+
+#auth-modal-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+}
+
+#auth-modal-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+#auth-modal-form input {
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  padding: 0.55rem 0.75rem;
+  font-family: "Nunito", sans-serif;
+}
+
+#auth-modal-submit {
+  background: var(--accent);
+  color: #fff8f0;
+  border: none;
+  padding: 0.6rem 1rem;
+  border-radius: 999px;
+  cursor: pointer;
+  font-weight: 700;
+  font-family: "Nunito", sans-serif;
+  transition: background 0.15s ease;
+}
+
+#auth-modal-submit:hover { background: var(--accent-hover); }
+
+.auth-modal-error {
+  color: var(--accent);
+  font-size: 0.82rem;
+  margin: 0;
+}
+
+.auth-modal-error.auth-modal-info { color: #3a7d44; }
+
+.auth-modal-toggle {
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-size: 0.8rem;
+  text-decoration: underline;
+  cursor: pointer;
+  margin-top: 0.9rem;
+  font-family: "Nunito", sans-serif;
+}
+
+.auth-modal-toggle:hover { color: var(--accent); }
+
 
 .compare-row {
   display: flex;

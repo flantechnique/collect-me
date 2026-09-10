@@ -113,21 +113,11 @@
     <section id="fun-view" hidden>
       <h2>Découvrir ma collection</h2>
 
+      <p class="empty fun-account-hint">Pseudo, photo de profil, bio et vitrine publique se gèrent maintenant depuis <button id="fun-account-link" type="button" class="link-btn">Mon compte</button>.</p>
+
       <div class="stats-section">
         <h3>🔔 Nouveautés de mes créateurs suivis</h3>
         <div id="digest-content"></div>
-      </div>
-
-      <div class="stats-section">
-        <h3>🪧 Vitrine publique</h3>
-        <label class="showcase-toggle" for="showcase-toggle-checkbox">
-          <input type="checkbox" id="showcase-toggle-checkbox" />
-          Rendre mes items possédés visibles publiquement via un lien
-        </label>
-        <div id="showcase-link-row" hidden>
-          <input id="showcase-link-input" type="text" readonly />
-          <button id="showcase-copy-btn" type="button">Copier le lien</button>
-        </div>
       </div>
 
       <div class="stats-section">
@@ -180,6 +170,80 @@
       <div id="creator-list"></div>
     </section>
 
+    <section id="account-view" hidden>
+      <button id="account-back-btn" type="button" class="tab">← Retour</button>
+      <h2>Mon compte</h2>
+
+      <div class="stats-section">
+        <h3>🪪 Profil public</h3>
+        <p class="empty">Comme sur Discogs ou Letterboxd : un pseudo, une photo, une bio, et une page publique à partager si tu le souhaites.</p>
+
+        <div class="account-images-row">
+          <div class="account-image-field">
+            <div class="account-avatar-preview">
+              <img id="account-avatar-img" alt="" />
+            </div>
+            <label class="account-upload-label" for="account-avatar-input">📷 Photo de profil</label>
+            <input id="account-avatar-input" type="file" accept="image/*" hidden />
+          </div>
+          <div class="account-image-field account-image-field-banner">
+            <div class="account-banner-preview">
+              <img id="account-banner-img" alt="" />
+            </div>
+            <label class="account-upload-label" for="account-banner-input">🖼️ Bannière</label>
+            <input id="account-banner-input" type="file" accept="image/*" hidden />
+          </div>
+        </div>
+
+        <form id="account-profile-form">
+          <label>
+            Pseudo
+            <input id="account-username-input" type="text" placeholder="ex: vinyl_lover" autocomplete="off" maxlength="20" />
+            <span id="account-username-status" class="account-username-status"></span>
+          </label>
+          <label>
+            Nom affiché
+            <input id="account-display-name-input" type="text" maxlength="60" />
+          </label>
+          <label class="full-width">
+            Bio
+            <textarea id="account-bio-input" maxlength="280" placeholder="Quelques mots sur toi et ta collection..."></textarea>
+          </label>
+          <label class="showcase-toggle" for="account-showcase-checkbox">
+            <input type="checkbox" id="account-showcase-checkbox" />
+            Rendre mon profil et mes items possédés visibles publiquement via un lien
+          </label>
+          <div id="account-link-row" hidden>
+            <input id="account-link-input" type="text" readonly />
+            <button id="account-link-copy-btn" type="button">Copier le lien</button>
+          </div>
+          <div class="actions">
+            <button type="submit">Enregistrer le profil</button>
+          </div>
+          <p id="account-profile-status" class="empty" hidden></p>
+        </form>
+      </div>
+
+      <div class="stats-section">
+        <h3>🔐 Connexion &amp; mot de passe</h3>
+        <p id="account-auth-methods" class="empty"></p>
+        <form id="account-password-form">
+          <label>
+            <span id="account-password-label">Définir un mot de passe</span>
+            <input id="account-password-input" type="password" minlength="6" placeholder="Au moins 6 caractères" autocomplete="new-password" required />
+          </label>
+          <label>
+            Confirmer le mot de passe
+            <input id="account-password-confirm-input" type="password" minlength="6" autocomplete="new-password" required />
+          </label>
+          <div class="actions">
+            <button type="submit">Enregistrer le mot de passe</button>
+          </div>
+          <p id="account-password-status" class="empty" hidden></p>
+        </form>
+      </div>
+    </section>
+
     <section id="labels-view" hidden>
       <div class="showcase-header label-actions">
         <h2>Étiquettes à imprimer</h2>
@@ -193,13 +257,42 @@
     </section>
 
     <section id="showcase-view" hidden>
+      <div id="showcase-banner" class="showcase-banner" hidden>
+        <img id="showcase-banner-img" alt="" />
+      </div>
       <div class="showcase-header">
-        <h2 id="showcase-title">Vitrine de collection</h2>
+        <div class="showcase-identity">
+          <img id="showcase-avatar-img" class="showcase-avatar" alt="" hidden />
+          <div>
+            <h2 id="showcase-title">Vitrine de collection</h2>
+            <p id="showcase-bio" class="empty showcase-bio" hidden></p>
+          </div>
+        </div>
         <a href="./" class="tab">← Retour à Collect Me</a>
       </div>
       <div id="showcase-content"></div>
     </section>
   </main>
+
+  <div id="auth-modal" class="auth-modal" hidden>
+    <div class="auth-modal-box">
+      <button id="auth-modal-close" type="button" class="barcode-scanner-close" aria-label="Fermer">×</button>
+      <h3 id="auth-modal-title">Se connecter</h3>
+      <form id="auth-modal-form">
+        <label>
+          Email
+          <input id="auth-modal-email" type="email" required autocomplete="email" />
+        </label>
+        <label>
+          Mot de passe
+          <input id="auth-modal-password" type="password" required minlength="6" autocomplete="current-password" />
+        </label>
+        <p id="auth-modal-error" class="auth-modal-error" hidden></p>
+        <button type="submit" id="auth-modal-submit">Se connecter</button>
+      </form>
+      <button id="auth-modal-toggle-mode" type="button" class="auth-modal-toggle">Pas encore de compte ? Créer un compte</button>
+    </div>
+  </div>
 
   <div id="item-bubble" class="item-bubble" hidden>
     <button id="item-bubble-close" class="item-bubble-close" type="button" aria-label="Fermer">×</button>

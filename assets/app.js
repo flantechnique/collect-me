@@ -86,18 +86,50 @@ const el = {
   badgesContent: document.getElementById("badges-content"),
   quizStartBtn: document.getElementById("quiz-start-btn"),
   quizQuestion: document.getElementById("quiz-question"),
-  showcaseToggleCheckbox: document.getElementById("showcase-toggle-checkbox"),
-  showcaseLinkRow: document.getElementById("showcase-link-row"),
-  showcaseLinkInput: document.getElementById("showcase-link-input"),
-  showcaseCopyBtn: document.getElementById("showcase-copy-btn"),
   showcaseView: document.getElementById("showcase-view"),
+  showcaseBanner: document.getElementById("showcase-banner"),
+  showcaseBannerImg: document.getElementById("showcase-banner-img"),
+  showcaseAvatarImg: document.getElementById("showcase-avatar-img"),
   showcaseTitle: document.getElementById("showcase-title"),
+  showcaseBio: document.getElementById("showcase-bio"),
   showcaseContent: document.getElementById("showcase-content"),
   collectionPrintLabelsBtn: document.getElementById("collection-print-labels-btn"),
   labelsView: document.getElementById("labels-view"),
   labelsGrid: document.getElementById("labels-grid"),
   labelsBackBtn: document.getElementById("labels-back-btn"),
   printLabelsBtn: document.getElementById("print-labels-btn"),
+  funAccountLink: document.getElementById("fun-account-link"),
+  accountView: document.getElementById("account-view"),
+  accountBackBtn: document.getElementById("account-back-btn"),
+  accountAvatarImg: document.getElementById("account-avatar-img"),
+  accountAvatarInput: document.getElementById("account-avatar-input"),
+  accountBannerImg: document.getElementById("account-banner-img"),
+  accountBannerInput: document.getElementById("account-banner-input"),
+  accountProfileForm: document.getElementById("account-profile-form"),
+  accountUsernameInput: document.getElementById("account-username-input"),
+  accountUsernameStatus: document.getElementById("account-username-status"),
+  accountDisplayNameInput: document.getElementById("account-display-name-input"),
+  accountBioInput: document.getElementById("account-bio-input"),
+  accountShowcaseCheckbox: document.getElementById("account-showcase-checkbox"),
+  accountLinkRow: document.getElementById("account-link-row"),
+  accountLinkInput: document.getElementById("account-link-input"),
+  accountLinkCopyBtn: document.getElementById("account-link-copy-btn"),
+  accountProfileStatus: document.getElementById("account-profile-status"),
+  accountAuthMethods: document.getElementById("account-auth-methods"),
+  accountPasswordForm: document.getElementById("account-password-form"),
+  accountPasswordLabel: document.getElementById("account-password-label"),
+  accountPasswordInput: document.getElementById("account-password-input"),
+  accountPasswordConfirmInput: document.getElementById("account-password-confirm-input"),
+  accountPasswordStatus: document.getElementById("account-password-status"),
+  authModal: document.getElementById("auth-modal"),
+  authModalClose: document.getElementById("auth-modal-close"),
+  authModalTitle: document.getElementById("auth-modal-title"),
+  authModalForm: document.getElementById("auth-modal-form"),
+  authModalEmail: document.getElementById("auth-modal-email"),
+  authModalPassword: document.getElementById("auth-modal-password"),
+  authModalError: document.getElementById("auth-modal-error"),
+  authModalSubmit: document.getElementById("auth-modal-submit"),
+  authModalToggleMode: document.getElementById("auth-modal-toggle-mode"),
 };
 
 let currentDetail = null;
@@ -252,21 +284,96 @@ function renderAuth() {
     const name = currentUser.user_metadata?.full_name || currentUser.email;
     const span = document.createElement("span");
     span.textContent = `Connecté : ${name}`;
+    const accountBtn = document.createElement("button");
+    accountBtn.type = "button";
+    accountBtn.textContent = "⚙️ Mon compte";
+    accountBtn.onclick = () => openAccountView();
     const btn = document.createElement("button");
+    btn.type = "button";
     btn.textContent = "Se déconnecter";
     btn.onclick = () => sb.auth.signOut();
-    el.authArea.append(span, btn);
+    el.authArea.append(span, accountBtn, btn);
   } else {
-    const btn = document.createElement("button");
-    btn.textContent = "Se connecter avec Google";
-    btn.onclick = () =>
+    const googleBtn = document.createElement("button");
+    googleBtn.type = "button";
+    googleBtn.textContent = "Se connecter avec Google";
+    googleBtn.onclick = () =>
       sb.auth.signInWithOAuth({
         provider: "google",
         options: { redirectTo: window.location.href },
       });
-    el.authArea.append(btn);
+    const emailBtn = document.createElement("button");
+    emailBtn.type = "button";
+    emailBtn.textContent = "✉️ Email / mot de passe";
+    emailBtn.onclick = () => openAuthModal("signin");
+    el.authArea.append(googleBtn, emailBtn);
   }
 }
+
+// ---------- connexion email + mot de passe (en plus de Google) ----------
+let authModalMode = "signin"; // "signin" | "signup"
+
+function openAuthModal(mode) {
+  authModalMode = mode;
+  el.authModalEmail.value = "";
+  el.authModalPassword.value = "";
+  el.authModalError.hidden = true;
+  el.authModalError.classList.remove("auth-modal-info");
+  updateAuthModalMode();
+  el.authModal.hidden = false;
+  el.authModalEmail.focus();
+}
+
+function updateAuthModalMode() {
+  if (authModalMode === "signup") {
+    el.authModalTitle.textContent = "Créer un compte";
+    el.authModalSubmit.textContent = "Créer mon compte";
+    el.authModalToggleMode.textContent = "Déjà un compte ? Se connecter";
+    el.authModalPassword.autocomplete = "new-password";
+  } else {
+    el.authModalTitle.textContent = "Se connecter";
+    el.authModalSubmit.textContent = "Se connecter";
+    el.authModalToggleMode.textContent = "Pas encore de compte ? Créer un compte";
+    el.authModalPassword.autocomplete = "current-password";
+  }
+}
+
+el.authModalClose.addEventListener("click", () => { el.authModal.hidden = true; });
+el.authModalToggleMode.addEventListener("click", () => {
+  authModalMode = authModalMode === "signup" ? "signin" : "signup";
+  el.authModalError.hidden = true;
+  el.authModalError.classList.remove("auth-modal-info");
+  updateAuthModalMode();
+});
+
+el.authModalForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  el.authModalError.hidden = true;
+  const email = el.authModalEmail.value.trim();
+  const password = el.authModalPassword.value;
+  el.authModalSubmit.disabled = true;
+  try {
+    const { error } =
+      authModalMode === "signup"
+        ? await sb.auth.signUp({ email, password, options: { emailRedirectTo: window.location.href } })
+        : await sb.auth.signInWithPassword({ email, password });
+    if (error) {
+      el.authModalError.textContent = error.message;
+      el.authModalError.hidden = false;
+      return;
+    }
+    if (authModalMode === "signup") {
+      el.authModalError.textContent =
+        "Compte créé ! Si une confirmation par email est requise, clique sur le lien reçu avant de te connecter.";
+      el.authModalError.hidden = false;
+      el.authModalError.classList.add("auth-modal-info");
+      return;
+    }
+    el.authModal.hidden = true;
+  } finally {
+    el.authModalSubmit.disabled = false;
+  }
+});
 
 // ---------- categories ----------
 async function loadCategories() {
@@ -904,6 +1011,7 @@ function switchView(view) {
   el.detailView.hidden = view !== "detail";
   el.creatorView.hidden = view !== "creator";
   el.labelsView.hidden = view !== "labels";
+  el.accountView.hidden = view !== "account";
   el.viewHomeBtn.classList.toggle("active", view === "home");
   el.viewCollectionBtn.classList.toggle("active", view === "collection");
   el.viewStatsBtn.classList.toggle("active", view === "stats");
@@ -1470,8 +1578,9 @@ async function loadFunView() {
   el.rouletteResult.innerHTML = "";
   el.quizQuestion.innerHTML = "";
   el.compareResult.innerHTML = "";
-  loadShowcaseSettings();
 }
+
+el.funAccountLink.addEventListener("click", () => openAccountView());
 
 // ---- digest des nouveautés des créateurs suivis : une recherche "œuvres du créateur" par
 // créateur suivi (même mode que la page créateur), en écartant ce qui est déjà possédé ----
@@ -1575,6 +1684,9 @@ async function loadCreatorDigest(entries) {
 // l'ami a lui-même choisi de rendre visible ----
 el.compareBtn.addEventListener("click", compareWithFriend);
 
+// accepte un lien/id de vitrine sous les deux formats : ?showcase=<uuid> (historique) et
+// ?u=<pseudo> (nouveau, lié au profil personnalisable) — ce dernier nécessite une résolution
+// pseudo → user_id via la table profiles
 function extractShowcaseUserId(raw) {
   const linkMatch = raw.match(/showcase=([0-9a-f-]{36})/i);
   if (linkMatch) return linkMatch[1];
@@ -1582,10 +1694,26 @@ function extractShowcaseUserId(raw) {
   return bareMatch ? bareMatch[0] : null;
 }
 
+function extractShowcaseUsername(raw) {
+  const linkMatch = raw.match(/[?&]u=([a-z0-9_]{3,20})/i);
+  if (linkMatch) return linkMatch[1].toLowerCase();
+  const bareMatch = raw.trim().match(/^[a-z0-9_]{3,20}$/i);
+  return bareMatch && !/^[0-9a-f-]{36}$/i.test(raw.trim()) ? bareMatch[0].toLowerCase() : null;
+}
+
+async function resolveFriendId(raw) {
+  const byId = extractShowcaseUserId(raw);
+  if (byId) return byId;
+  const byUsername = extractShowcaseUsername(raw);
+  if (!byUsername) return null;
+  const { data } = await sb.from("profiles").select("id").eq("username", byUsername).maybeSingle();
+  return data?.id ?? null;
+}
+
 async function compareWithFriend() {
   const raw = el.compareInput.value.trim();
   if (!raw) return;
-  const friendId = extractShowcaseUserId(raw);
+  const friendId = await resolveFriendId(raw);
   if (!friendId) {
     el.compareResult.innerHTML = "<p class='empty'>Lien ou identifiant de vitrine invalide.</p>";
     return;
@@ -1713,59 +1841,218 @@ async function renderRecommendations(entries) {
   el.recommendationsContent.appendChild(grid);
 }
 
-// ---- vitrine publique : opt-in + lien partageable (voir aussi renderPublicShowcase, qui
-// affiche la vitrine côté visiteur, sans connexion) ----
-async function loadShowcaseSettings() {
+// ---- "Mon compte" : profil public (pseudo, avatar, bannière, bio, vitrine) + connexion ----
+el.accountBackBtn.addEventListener("click", () => switchView("home"));
+
+async function openAccountView() {
   if (!currentUser) return;
+  switchView("account");
+  el.accountProfileStatus.hidden = true;
+  el.accountPasswordStatus.hidden = true;
+  el.accountUsernameStatus.textContent = "";
+  el.accountUsernameStatus.className = "account-username-status";
+
   const { data: profile, error } = await sb
     .from("profiles")
-    .select("public_showcase")
+    .select("username, display_name, bio, avatar_url, banner_url, public_showcase")
     .eq("id", currentUser.id)
     .maybeSingle();
-  if (error) return console.error(error);
-  const isPublic = profile?.public_showcase ?? false;
-  el.showcaseToggleCheckbox.checked = isPublic;
-  updateShowcaseLinkVisibility(isPublic);
+  if (error) return alert(error.message);
+
+  el.accountUsernameInput.value = profile?.username || "";
+  el.accountUsernameInput.dataset.original = profile?.username || "";
+  el.accountDisplayNameInput.value = profile?.display_name || currentUser.user_metadata?.full_name || "";
+  el.accountBioInput.value = profile?.bio || "";
+  el.accountShowcaseCheckbox.checked = profile?.public_showcase ?? false;
+  updateAccountLinkVisibility(profile?.public_showcase ?? false, profile?.username || null);
+  setAccountImagePreview(el.accountAvatarImg, profile?.avatar_url);
+  setAccountImagePreview(el.accountBannerImg, profile?.banner_url);
+
+  renderAccountAuthMethods();
 }
 
-function updateShowcaseLinkVisibility(isPublic) {
-  el.showcaseLinkRow.hidden = !isPublic;
+function setAccountImagePreview(imgEl, url) {
+  imgEl.src = url || "";
+  imgEl.style.visibility = url ? "visible" : "hidden";
+}
+
+function updateAccountLinkVisibility(isPublic, username) {
+  el.accountLinkRow.hidden = !isPublic;
   if (isPublic && currentUser) {
-    el.showcaseLinkInput.value = `${location.origin}${location.pathname}?showcase=${currentUser.id}`;
+    const base = `${location.origin}${location.pathname}`;
+    el.accountLinkInput.value = username ? `${base}?u=${username}` : `${base}?showcase=${currentUser.id}`;
   }
 }
 
-el.showcaseToggleCheckbox.addEventListener("change", async () => {
-  const isPublic = el.showcaseToggleCheckbox.checked;
+// upload avatar/bannière : bucket Storage public "profile-images", chemin
+// <user_id>/avatar.<ext> ou <user_id>/banner.<ext> (upsert pour remplacer l'ancien fichier),
+// URL publique permanente (contrairement aux photos personnelles, ces images sont destinées
+// à être vues par des visiteurs anonymes sur la page de profil publique)
+async function uploadAccountImage(file, kind) {
+  const ext = (file.name.split(".").pop() || "jpg").toLowerCase();
+  const path = `${currentUser.id}/${kind}.${ext}`;
+  const { error: uploadError } = await sb.storage
+    .from("profile-images")
+    .upload(path, file, { upsert: true });
+  if (uploadError) {
+    alert(uploadError.message);
+    return null;
+  }
+  const { data } = sb.storage.from("profile-images").getPublicUrl(path);
+  // on ajoute un paramètre anti-cache : même chemin qu'avant si l'utilisateur remplace son image
+  return `${data.publicUrl}?v=${Date.now()}`;
+}
+
+el.accountAvatarInput.addEventListener("change", async () => {
+  const file = el.accountAvatarInput.files[0];
+  el.accountAvatarInput.value = "";
+  if (!file) return;
+  const url = await uploadAccountImage(file, "avatar");
+  if (!url) return;
+  const { error } = await sb
+    .from("profiles")
+    .upsert({ id: currentUser.id, avatar_url: url }, { onConflict: "id" });
+  if (error) return alert(error.message);
+  setAccountImagePreview(el.accountAvatarImg, url);
+});
+
+el.accountBannerInput.addEventListener("change", async () => {
+  const file = el.accountBannerInput.files[0];
+  el.accountBannerInput.value = "";
+  if (!file) return;
+  const url = await uploadAccountImage(file, "banner");
+  if (!url) return;
+  const { error } = await sb
+    .from("profiles")
+    .upsert({ id: currentUser.id, banner_url: url }, { onConflict: "id" });
+  if (error) return alert(error.message);
+  setAccountImagePreview(el.accountBannerImg, url);
+});
+
+// vérification de disponibilité du pseudo, avec anti-rebond
+let usernameCheckTimer = null;
+el.accountUsernameInput.addEventListener("input", () => {
+  clearTimeout(usernameCheckTimer);
+  const raw = el.accountUsernameInput.value.trim().toLowerCase();
+  el.accountUsernameInput.value = raw;
+  if (!raw) {
+    el.accountUsernameStatus.textContent = "";
+    return;
+  }
+  if (!/^[a-z0-9_]{3,20}$/.test(raw)) {
+    el.accountUsernameStatus.textContent = "3 à 20 caractères : lettres, chiffres, _";
+    el.accountUsernameStatus.className = "account-username-status taken";
+    return;
+  }
+  if (raw === el.accountUsernameInput.dataset.original) {
+    el.accountUsernameStatus.textContent = "Ton pseudo actuel";
+    el.accountUsernameStatus.className = "account-username-status ok";
+    return;
+  }
+  el.accountUsernameStatus.textContent = "Vérification...";
+  el.accountUsernameStatus.className = "account-username-status";
+  usernameCheckTimer = setTimeout(async () => {
+    const { data, error } = await sb.from("profiles").select("id").eq("username", raw).maybeSingle();
+    if (error) return;
+    if (data) {
+      el.accountUsernameStatus.textContent = "Déjà pris";
+      el.accountUsernameStatus.className = "account-username-status taken";
+    } else {
+      el.accountUsernameStatus.textContent = "Disponible";
+      el.accountUsernameStatus.className = "account-username-status ok";
+    }
+  }, 400);
+});
+
+el.accountProfileForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  el.accountProfileStatus.hidden = true;
+  const username = el.accountUsernameInput.value.trim().toLowerCase() || null;
+  if (username && !/^[a-z0-9_]{3,20}$/.test(username)) {
+    el.accountProfileStatus.textContent = "Pseudo invalide (3 à 20 caractères : lettres, chiffres, _).";
+    el.accountProfileStatus.hidden = false;
+    return;
+  }
+  const isPublic = el.accountShowcaseCheckbox.checked;
   const { error } = await sb.from("profiles").upsert(
     {
       id: currentUser.id,
+      username,
+      display_name: el.accountDisplayNameInput.value.trim() || currentUser.user_metadata?.full_name || currentUser.email || null,
+      bio: el.accountBioInput.value.trim() || null,
       public_showcase: isPublic,
-      display_name: currentUser.user_metadata?.full_name || currentUser.email || null,
     },
     { onConflict: "id" }
   );
   if (error) {
-    alert(error.message);
-    el.showcaseToggleCheckbox.checked = !isPublic;
+    el.accountProfileStatus.textContent = error.message.includes("profiles_username_unique")
+      ? "Ce pseudo est déjà pris."
+      : error.message;
+    el.accountProfileStatus.hidden = false;
     return;
   }
-  updateShowcaseLinkVisibility(isPublic);
+  el.accountUsernameInput.dataset.original = username || "";
+  updateAccountLinkVisibility(isPublic, username);
+  el.accountProfileStatus.textContent = "Profil enregistré !";
+  el.accountProfileStatus.hidden = false;
 });
 
-el.showcaseCopyBtn.addEventListener("click", async () => {
+el.accountLinkCopyBtn.addEventListener("click", async () => {
   try {
-    await navigator.clipboard.writeText(el.showcaseLinkInput.value);
-    const original = el.showcaseCopyBtn.textContent;
-    el.showcaseCopyBtn.textContent = "Copié !";
-    setTimeout(() => { el.showcaseCopyBtn.textContent = original; }, 1500);
+    await navigator.clipboard.writeText(el.accountLinkInput.value);
+    const original = el.accountLinkCopyBtn.textContent;
+    el.accountLinkCopyBtn.textContent = "Copié !";
+    setTimeout(() => { el.accountLinkCopyBtn.textContent = original; }, 1500);
   } catch (_e) {
-    el.showcaseLinkInput.select();
+    el.accountLinkInput.select();
   }
+});
+
+// ---- connexion & mot de passe : un compte connecté (via Google ou email) peut définir/
+// changer un mot de passe, ce qui active email+mot de passe comme moyen de connexion
+// supplémentaire sur ce même compte (identités Supabase, cf. currentUser.identities) ----
+function hasPasswordAuth() {
+  return (currentUser?.identities || []).some((i) => i.provider === "email");
+}
+
+function renderAccountAuthMethods() {
+  const methods = (currentUser?.identities || []).map((i) => i.provider);
+  const label = methods.length
+    ? `Moyens de connexion actifs : ${methods.map((m) => (m === "google" ? "Google" : "Email + mot de passe")).join(", ")}.`
+    : "";
+  el.accountAuthMethods.textContent = label;
+  el.accountPasswordLabel.textContent = hasPasswordAuth() ? "Changer le mot de passe" : "Définir un mot de passe";
+}
+
+el.accountPasswordForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  el.accountPasswordStatus.hidden = true;
+  const password = el.accountPasswordInput.value;
+  const confirm = el.accountPasswordConfirmInput.value;
+  if (password !== confirm) {
+    el.accountPasswordStatus.textContent = "Les deux mots de passe ne correspondent pas.";
+    el.accountPasswordStatus.hidden = false;
+    return;
+  }
+  const { error } = await sb.auth.updateUser({ password });
+  if (error) {
+    el.accountPasswordStatus.textContent = error.message;
+    el.accountPasswordStatus.hidden = false;
+    return;
+  }
+  el.accountPasswordInput.value = "";
+  el.accountPasswordConfirmInput.value = "";
+  // on rafraîchit l'utilisateur pour que currentUser.identities reflète l'ajout de l'identité email
+  const { data: { user } } = await sb.auth.getUser();
+  if (user) currentUser = user;
+  renderAccountAuthMethods();
+  el.accountPasswordStatus.textContent = "Mot de passe enregistré !";
+  el.accountPasswordStatus.hidden = false;
 });
 
 // ---- rendu de la vitrine publique pour un visiteur (pas besoin d'être connecté) ----
-async function renderPublicShowcase(userId) {
+// accepte soit un user_id (lien historique ?showcase=), soit un pseudo (nouveau lien ?u=)
+async function renderPublicShowcase({ userId, username }) {
   document.querySelector("header").hidden = true;
   document.querySelector("nav.main-nav").hidden = true;
   ["home-view", "catalogue-view", "collection-view", "stats-view", "fun-view", "detail-view", "creator-view"]
@@ -1775,19 +2062,41 @@ async function renderPublicShowcase(userId) {
     });
   el.showcaseView.hidden = false;
 
-  const { data: profile, error: profileError } = await sb
+  let profileQuery = sb
     .from("profiles")
-    .select("display_name, public_showcase")
-    .eq("id", userId)
-    .maybeSingle();
+    .select("id, display_name, public_showcase, username, bio, avatar_url, banner_url");
+  profileQuery = username ? profileQuery.eq("username", username) : profileQuery.eq("id", userId);
+  const { data: profile, error: profileError } = await profileQuery.maybeSingle();
 
   if (profileError || !profile || !profile.public_showcase) {
-    el.showcaseTitle.textContent = "Vitrine introuvable";
-    el.showcaseContent.innerHTML = "<p class='empty'>Cette vitrine n'existe pas ou n'est plus publique.</p>";
+    el.showcaseTitle.textContent = "Profil introuvable";
+    el.showcaseContent.innerHTML = "<p class='empty'>Ce profil n'existe pas ou n'est plus public.</p>";
     return;
   }
+  userId = profile.id;
 
-  el.showcaseTitle.textContent = `📚 Collection de ${escapeHtml(profile.display_name || "un·e collectionneur·se")}`;
+  el.showcaseTitle.textContent = profile.username
+    ? `📚 @${escapeHtml(profile.username)}`
+    : `📚 Collection de ${escapeHtml(profile.display_name || "un·e collectionneur·se")}`;
+
+  if (profile.bio) {
+    el.showcaseBio.textContent = profile.bio;
+    el.showcaseBio.hidden = false;
+  } else {
+    el.showcaseBio.hidden = true;
+  }
+  if (profile.avatar_url) {
+    el.showcaseAvatarImg.src = profile.avatar_url;
+    el.showcaseAvatarImg.hidden = false;
+  } else {
+    el.showcaseAvatarImg.hidden = true;
+  }
+  if (profile.banner_url) {
+    el.showcaseBannerImg.src = profile.banner_url;
+    el.showcaseBanner.hidden = false;
+  } else {
+    el.showcaseBanner.hidden = true;
+  }
 
   const { data: items, error } = await sb
     .from("public_showcase_items")
@@ -2917,10 +3226,12 @@ async function openSharedItem(itemId) {
 
 // ---------- boot ----------
 const showcaseUserId = new URLSearchParams(location.search).get("showcase");
+const showcaseUsername = new URLSearchParams(location.search).get("u");
 const sharedItemId = new URLSearchParams(location.search).get("item");
-if (showcaseUserId) {
-  // lien de vitrine publique : pas d'auth, pas de catalogue — juste la collection exposée
-  renderPublicShowcase(showcaseUserId);
+if (showcaseUserId || showcaseUsername) {
+  // lien de profil public (historique ?showcase=<id> ou nouveau ?u=<pseudo>) : pas d'auth,
+  // pas de catalogue — juste le profil et la collection exposée
+  renderPublicShowcase({ userId: showcaseUserId, username: showcaseUsername });
 } else {
   initAuth();
   loadCategories().then(() => {
