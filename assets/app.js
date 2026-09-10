@@ -436,8 +436,14 @@ function renderCollectionGroup(group) {
   const card = document.createElement("div");
   card.className = "card";
   card.innerHTML = `
-    <h3>${item.categories.icon ?? ""} ${item.title}</h3>
-    <p class="status status-${status}">${statusLabel(status)}${entryIds.length > 1 ? ` × ${entryIds.length}` : ""}</p>
+    <div class="collection-card-body">
+      <img class="collection-cover" src="${item.cover_image_url ?? ""}" alt="" onerror="this.style.visibility='hidden'" />
+      <div class="collection-card-info">
+        <h3>${item.categories.icon ?? ""} ${escapeHtml(item.title)}</h3>
+        <p class="status status-${status}">${statusLabel(status)}</p>
+        <p class="collection-qty">${entryIds.length} exemplaire${entryIds.length > 1 ? "s" : ""}</p>
+      </div>
+    </div>
   `;
 
   const actions = document.createElement("div");
