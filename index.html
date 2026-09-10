@@ -20,6 +20,7 @@
   <nav class="main-nav">
     <button id="view-home" class="active">Accueil</button>
     <button id="view-collection">Ma collection</button>
+    <button id="view-stats">Statistiques</button>
   </nav>
 
   <main>
@@ -90,6 +91,15 @@
         <select id="collection-filter"></select>
       </div>
       <div id="collection-list"></div>
+    </section>
+
+    <section id="stats-view" hidden>
+      <h2>Statistiques de ma collection</h2>
+      <div id="stats-content"></div>
+      <div class="stats-export-row">
+        <button id="stats-export-csv-btn" type="button">⬇️ Exporter en CSV</button>
+        <button id="stats-export-json-btn" type="button">⬇️ Exporter en JSON</button>
+      </div>
     </section>
 
     <section id="detail-view" hidden>

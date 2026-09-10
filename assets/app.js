@@ -56,6 +56,11 @@ const el = {
   csvImportBtn: document.getElementById("csv-import-btn"),
   csvImportInput: document.getElementById("csv-import-input"),
   csvImportStatus: document.getElementById("csv-import-status"),
+  viewStatsBtn: document.getElementById("view-stats"),
+  statsView: document.getElementById("stats-view"),
+  statsContent: document.getElementById("stats-content"),
+  statsExportCsvBtn: document.getElementById("stats-export-csv-btn"),
+  statsExportJsonBtn: document.getElementById("stats-export-json-btn"),
 };
 
 let currentDetail = null;
@@ -667,6 +672,10 @@ el.viewCollectionBtn.addEventListener("click", () => {
   unsubscribeCommunityFeed();
   switchView("collection");
 });
+el.viewStatsBtn.addEventListener("click", () => {
+  unsubscribeCommunityFeed();
+  switchView("stats");
+});
 
 el.detailBack.addEventListener("click", () => switchView("catalogue"));
 el.creatorBack.addEventListener("click", () => switchView("catalogue"));
@@ -675,11 +684,14 @@ function switchView(view) {
   el.homeView.hidden = view !== "home";
   el.catalogueView.hidden = view !== "catalogue";
   el.collectionView.hidden = view !== "collection";
+  el.statsView.hidden = view !== "stats";
   el.detailView.hidden = view !== "detail";
   el.creatorView.hidden = view !== "creator";
   el.viewHomeBtn.classList.toggle("active", view === "home");
   el.viewCollectionBtn.classList.toggle("active", view === "collection");
+  el.viewStatsBtn.classList.toggle("active", view === "stats");
   if (view === "collection") loadMyCollection();
+  if (view === "stats") loadStats();
 }
 
 // ---------- recherche externe (Discogs, RAWG...) — dropdown en live ----------
@@ -996,6 +1008,185 @@ async function importCsv(file) {
 
   loadCatalogue();
   if (!el.collectionView.hidden) loadMyCollection();
+}
+
+// ---------- statistiques ----------
+let statsEntries = [];
+
+async function loadStats() {
+  if (!currentUser) {
+    el.statsContent.innerHTML = "<p class='empty'>Connecte-toi pour voir tes statistiques.</p>";
+    return;
+  }
+  el.statsContent.innerHTML = "<p class='empty'>Chargement...</p>";
+  const { data, error } = await sb
+    .from("collection_entries")
+    .select("*, items(*, categories(*))")
+    .eq("user_id", currentUser.id)
+    .order("created_at", { ascending: false });
+  if (error) {
+    el.statsContent.innerHTML = `<p class='empty'>Erreur : ${error.message}</p>`;
+    return;
+  }
+  statsEntries = data ?? [];
+  renderStats(statsEntries);
+}
+
+function renderStats(entries) {
+  el.statsContent.innerHTML = "";
+  if (!entries.length) {
+    el.statsContent.innerHTML =
+      "<p class='empty'>Rien à analyser pour l'instant — ajoute des items à ta collection.</p>";
+    return;
+  }
+
+  const byStatus = { owned: 0, wanted: 0, for_sale: 0 };
+  const byCategory = new Map(); // nom de catégorie -> nombre d'exemplaires
+  const uniqueItemIds = new Set();
+  let totalSpent = 0;
+  let spentCount = 0;
+  const byYear = new Map(); // année -> nombre d'acquisitions
+
+  entries.forEach((e) => {
+    byStatus[e.status] = (byStatus[e.status] ?? 0) + 1;
+    const catName = e.items.categories.name;
+    byCategory.set(catName, (byCategory.get(catName) ?? 0) + 1);
+    uniqueItemIds.add(e.item_id);
+    if (e.price_paid != null) {
+      totalSpent += Number(e.price_paid);
+      spentCount++;
+    }
+    if (e.acquired_at) {
+      const year = e.acquired_at.slice(0, 4);
+      byYear.set(year, (byYear.get(year) ?? 0) + 1);
+    }
+  });
+
+  // ---- cartes résumé ----
+  const cards = document.createElement("div");
+  cards.className = "stats-cards";
+  const summary = [
+    [entries.length, "Exemplaires au total"],
+    [uniqueItemIds.size, "Items uniques"],
+    [byStatus.owned, "Possédés"],
+    [byStatus.wanted, "Recherchés"],
+    [byStatus.for_sale, "À vendre"],
+    [spentCount ? `${totalSpent.toFixed(2)} €` : "—", "Dépensé (renseigné)"],
+  ];
+  summary.forEach(([value, label]) => {
+    const card = document.createElement("div");
+    card.className = "stats-card";
+    card.innerHTML = `<div class="stats-card-value">${value}</div><div class="stats-card-label">${label}</div>`;
+    cards.appendChild(card);
+  });
+  el.statsContent.appendChild(cards);
+
+  // ---- répartition par catégorie ----
+  el.statsContent.appendChild(
+    buildStatsBarSection("Répartition par catégorie", [...byCategory.entries()].sort((a, b) => b[1] - a[1]))
+  );
+
+  // ---- répartition par année d'acquisition (seulement si l'info est renseignée) ----
+  if (byYear.size) {
+    el.statsContent.appendChild(
+      buildStatsBarSection(
+        "Acquisitions par année",
+        [...byYear.entries()].sort((a, b) => a[0].localeCompare(b[0]))
+      )
+    );
+  }
+
+  // ---- derniers ajouts ----
+  const recentSection = document.createElement("div");
+  recentSection.className = "stats-section";
+  recentSection.innerHTML = "<h3>Derniers ajouts</h3>";
+  const list = document.createElement("ul");
+  list.className = "stats-recent-list";
+  entries.slice(0, 8).forEach((e) => {
+    const date = e.acquired_at ?? e.created_at?.slice(0, 10) ?? "";
+    const li = document.createElement("li");
+    li.innerHTML = `
+      <span>${e.items.categories.icon ?? ""} ${escapeHtml(e.items.title)}</span>
+      <span class="stats-recent-date">${escapeHtml(date)}</span>
+    `;
+    list.appendChild(li);
+  });
+  recentSection.appendChild(list);
+  el.statsContent.appendChild(recentSection);
+}
+
+function buildStatsBarSection(title, pairs) {
+  const section = document.createElement("div");
+  section.className = "stats-section";
+  const heading = document.createElement("h3");
+  heading.textContent = title;
+  section.appendChild(heading);
+  const max = Math.max(...pairs.map(([, count]) => count), 1);
+  pairs.forEach(([label, count]) => {
+    const row = document.createElement("div");
+    row.className = "stats-bar-row";
+    row.innerHTML = `
+      <span class="stats-bar-label">${escapeHtml(String(label))}</span>
+      <span class="stats-bar-track"><span class="stats-bar-fill" style="width:${(count / max) * 100}%"></span></span>
+      <span class="stats-bar-count">${count}</span>
+    `;
+    section.appendChild(row);
+  });
+  return section;
+}
+
+// ---------- export de la collection (sauvegarde/analyse externe) ----------
+el.statsExportCsvBtn.addEventListener("click", exportCollectionCsv);
+el.statsExportJsonBtn.addEventListener("click", exportCollectionJson);
+
+function triggerDownload(content, filename, mime) {
+  const blob = new Blob([content], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+function csvEscape(v) {
+  const s = v == null ? "" : String(v);
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+function exportCollectionCsv() {
+  if (!statsEntries.length) return;
+  const columns = ["categorie", "titre", "statut", "etat", "prix_paye", "date_acquisition", "notes", "attributs"];
+  const rows = statsEntries.map((e) => [
+    e.items.categories.name,
+    e.items.title,
+    statusLabel(e.status),
+    e.condition ?? "",
+    e.price_paid ?? "",
+    e.acquired_at ?? "",
+    e.notes ?? "",
+    JSON.stringify(e.items.attributes ?? {}),
+  ]);
+  const csv = [columns.join(","), ...rows.map((r) => r.map(csvEscape).join(","))].join("\r\n");
+  triggerDownload(csv, "ma-collection.csv", "text/csv;charset=utf-8;");
+}
+
+function exportCollectionJson() {
+  if (!statsEntries.length) return;
+  const data = statsEntries.map((e) => ({
+    categorie: e.items.categories.slug,
+    titre: e.items.title,
+    statut: e.status,
+    etat: e.condition,
+    prix_paye: e.price_paid,
+    date_acquisition: e.acquired_at,
+    notes: e.notes,
+    image: e.items.cover_image_url,
+    attributs: e.items.attributes,
+  }));
+  triggerDownload(JSON.stringify(data, null, 2), "ma-collection.json", "application/json;charset=utf-8;");
 }
 
 // ---------- helpers ----------
