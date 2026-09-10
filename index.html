@@ -263,6 +263,37 @@
           <p id="account-password-status" class="empty" hidden></p>
         </form>
       </div>
+
+      <div class="stats-section">
+        <h3>📧 Changer d'email</h3>
+        <p class="empty">Email actuel : <span id="account-current-email"></span></p>
+        <form id="account-email-form">
+          <label>
+            Nouvel email
+            <input id="account-email-input" type="email" required autocomplete="email" />
+          </label>
+          <div class="actions">
+            <button type="submit">Enregistrer le nouvel email</button>
+          </div>
+          <p id="account-email-status" class="empty" hidden></p>
+        </form>
+      </div>
+
+      <div class="stats-section account-danger-zone">
+        <h3>🗑️ Supprimer mon compte</h3>
+        <p class="empty">Cette action supprime définitivement ton compte, ta collection, ton profil et tes photos. Impossible à annuler.</p>
+        <button id="account-export-before-delete-btn" type="button">⬇️ Exporter mes données avant de supprimer</button>
+        <form id="account-delete-form">
+          <label class="full-width">
+            Tape <strong>SUPPRIMER</strong> pour confirmer
+            <input id="account-delete-confirm-input" type="text" autocomplete="off" />
+          </label>
+          <div class="actions">
+            <button type="submit" id="account-delete-submit-btn" class="danger-btn" disabled>Supprimer définitivement mon compte</button>
+          </div>
+          <p id="account-delete-status" class="empty" hidden></p>
+        </form>
+      </div>
     </section>
 
     <section id="labels-view" hidden>

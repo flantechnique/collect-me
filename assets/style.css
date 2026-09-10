@@ -1457,14 +1457,18 @@ form#add-item-form button[type="submit"]:hover { background: var(--accent-hover)
 .account-upload-label:hover { color: var(--accent-hover); }
 
 #account-profile-form,
-#account-password-form {
+#account-password-form,
+#account-email-form,
+#account-delete-form {
   display: flex;
   flex-wrap: wrap;
   gap: 0.9rem;
 }
 
 #account-profile-form label,
-#account-password-form label {
+#account-password-form label,
+#account-email-form label,
+#account-delete-form label {
   display: flex;
   flex-direction: column;
   gap: 0.3rem;
@@ -1475,11 +1479,14 @@ form#add-item-form button[type="submit"]:hover { background: var(--accent-hover)
   min-width: 200px;
 }
 
-#account-profile-form label.full-width { flex-basis: 100%; }
+#account-profile-form label.full-width,
+#account-delete-form label.full-width { flex-basis: 100%; }
 
 #account-profile-form input,
 #account-profile-form textarea,
-#account-password-form input {
+#account-password-form input,
+#account-email-form input,
+#account-delete-form input {
   border-radius: 8px;
   border: 1px solid var(--border);
   background: var(--card);
@@ -1491,7 +1498,29 @@ form#add-item-form button[type="submit"]:hover { background: var(--accent-hover)
 
 #account-profile-form textarea { min-height: 70px; resize: vertical; }
 #account-profile-form .actions,
-#account-password-form .actions { flex-basis: 100%; }
+#account-password-form .actions,
+#account-email-form .actions,
+#account-delete-form .actions { flex-basis: 100%; }
+
+.account-danger-zone {
+  border-color: var(--accent);
+}
+
+.account-danger-zone h3 { color: var(--accent); }
+
+#account-export-before-delete-btn {
+  margin-bottom: 0.9rem;
+}
+
+.danger-btn {
+  background: var(--accent) !important;
+}
+
+.danger-btn:disabled {
+  background: var(--muted) !important;
+  cursor: not-allowed;
+  opacity: 0.6;
+}
 
 .account-username-status {
   font-size: 0.78rem;
