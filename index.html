@@ -455,6 +455,30 @@
     </div>
   </div>
 
+  <div id="new-category-modal" class="auth-modal" hidden>
+    <div class="auth-modal-box new-category-box">
+      <button id="new-category-close" type="button" class="barcode-scanner-close" aria-label="Fermer">×</button>
+      <h3>Nouvelle collection</h3>
+      <form id="new-category-form">
+        <label>
+          Nom de la collection
+          <input id="new-category-name" name="name" required maxlength="60" placeholder="ex: Cartes postales" />
+        </label>
+        <label>
+          Icône (un émoji, optionnel)
+          <input id="new-category-icon" name="icon" maxlength="4" placeholder="📦" />
+        </label>
+        <div class="new-category-fields-header">
+          <span>Champs personnalisés (optionnel)</span>
+          <button type="button" id="new-category-add-field" class="link-btn">+ Ajouter un champ</button>
+        </div>
+        <div id="new-category-fields"></div>
+        <p id="new-category-error" class="auth-modal-error" hidden></p>
+        <button type="submit" id="new-category-submit">Créer la collection</button>
+      </form>
+    </div>
+  </div>
+
   <div id="item-bubble" class="item-bubble" hidden>
     <button id="item-bubble-close" class="item-bubble-close" type="button" aria-label="Fermer">×</button>
     <div id="item-bubble-content"></div>
