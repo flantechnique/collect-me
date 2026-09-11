@@ -159,6 +159,15 @@ const el = {
   authModalError: document.getElementById("auth-modal-error"),
   authModalSubmit: document.getElementById("auth-modal-submit"),
   authModalToggleMode: document.getElementById("auth-modal-toggle-mode"),
+  newCategoryModal: document.getElementById("new-category-modal"),
+  newCategoryClose: document.getElementById("new-category-close"),
+  newCategoryForm: document.getElementById("new-category-form"),
+  newCategoryName: document.getElementById("new-category-name"),
+  newCategoryIcon: document.getElementById("new-category-icon"),
+  newCategoryAddField: document.getElementById("new-category-add-field"),
+  newCategoryFields: document.getElementById("new-category-fields"),
+  newCategoryError: document.getElementById("new-category-error"),
+  newCategorySubmit: document.getElementById("new-category-submit"),
   notificationsArea: document.getElementById("notifications-area"),
   notificationsBellBtn: document.getElementById("notifications-bell-btn"),
   notificationsBadge: document.getElementById("notifications-badge"),
@@ -209,6 +218,7 @@ const CATEGORY_SEARCH_FUNCTIONS = {
   book: "openlibrary-search",
   dvd: "tmdb-search",
   movie_poster: "tmdb-search",
+  tcg: "tcg-search",
 };
 
 // Pour chaque catégorie avec recherche externe : comment transformer un résultat
@@ -254,6 +264,18 @@ const CATEGORY_RESULT_MAPPERS = {
       ...(r.year && { release_year: r.year }),
     },
   }),
+  // Le TCG mélange trois sources (Pokémon/Yu-Gi-Oh!/Magic), tcg-search les fusionne déjà
+  // et fournit un tcg_id préfixé par la source ("pokemon:...", "yugioh:...", "mtg:...").
+  tcg: (r) => ({
+    externalIds: { tcg_id: r.tcg_id },
+    attributes: {
+      ...(r.game && { game: r.game }),
+      ...(r.set_name && { set_name: r.set_name }),
+      ...(r.card_number && { card_number: r.card_number }),
+      ...(r.rarity && { rarity: r.rarity }),
+      ...(r.year && { year: r.year }),
+    },
+  }),
 };
 
 // Pour chaque catégorie, l'attribut qui représente son "créateur" (artiste, studio,
@@ -275,6 +297,7 @@ const EXTERNAL_ID_KEY = {
   book: "olid",
   dvd: "tmdb_id",
   movie_poster: "tmdb_id",
+  tcg: "tcg_id",
 };
 
 // Clé dans external_ids qui identifie le "créateur" d'un item, quand on la connaît
@@ -307,6 +330,7 @@ const YEAR_ATTRIBUTE_BY_CATEGORY = {
   book: "year",
   dvd: "release_year",
   movie_poster: "release_year",
+  tcg: "year",
 };
 
 function itemYear(item) {
@@ -332,6 +356,7 @@ async function initAuth() {
   sb.auth.onAuthStateChange((_event, session) => {
     currentUser = session?.user ?? null;
     renderAuth();
+    if (categories.length) renderHome(); // affiche/masque la tuile "Nouvelle collection" selon la connexion
     if (currentUser) loadMyCollection();
   });
 }
@@ -570,7 +595,121 @@ function renderHome() {
     };
     el.homeCategories.appendChild(card);
   });
+
+  if (currentUser) {
+    const newCard = document.createElement("button");
+    newCard.type = "button";
+    newCard.className = "home-category-card home-category-card-new";
+    newCard.innerHTML = `
+      <span class="home-category-icon">➕</span>
+      <span class="home-category-name">Nouvelle collection</span>
+    `;
+    newCard.onclick = openNewCategoryModal;
+    el.homeCategories.appendChild(newCard);
+  }
 }
+
+// ---------- création d'une collection personnalisée (self-service) ----------
+// Les catégories de base (vinyles, jeux vidéo...) sont gérées par l'admin, mais
+// n'importe quel utilisateur connecté peut créer les siennes ici (TCG déjà fourni
+// nativement, ceci sert pour tout le reste : cartes postales, figurines...).
+// L'edge function create-category valide et insère avec le rôle service (la table
+// categories n'autorise pas l'insertion directe côté client).
+function openNewCategoryModal() {
+  el.newCategoryForm.reset();
+  el.newCategoryFields.innerHTML = "";
+  el.newCategoryError.hidden = true;
+  addNewCategoryFieldRow();
+  el.newCategoryModal.hidden = false;
+  el.newCategoryName.focus();
+}
+
+function closeNewCategoryModal() {
+  el.newCategoryModal.hidden = true;
+}
+
+el.newCategoryClose.addEventListener("click", closeNewCategoryModal);
+el.newCategoryModal.addEventListener("click", (e) => {
+  if (e.target === el.newCategoryModal) closeNewCategoryModal();
+});
+
+function addNewCategoryFieldRow() {
+  const row = document.createElement("div");
+  row.className = "new-category-field-row";
+  row.innerHTML = `
+    <input type="text" class="ncf-label" placeholder="Nom du champ (ex: Marque)" maxlength="40" />
+    <select class="ncf-type">
+      <option value="text">Texte</option>
+      <option value="number">Nombre</option>
+      <option value="select">Liste déroulante</option>
+    </select>
+    <input type="text" class="ncf-options" placeholder="Options séparées par des virgules" hidden />
+    <button type="button" class="ncf-remove" aria-label="Retirer ce champ">×</button>
+  `;
+  const typeSelect = row.querySelector(".ncf-type");
+  const optionsInput = row.querySelector(".ncf-options");
+  typeSelect.addEventListener("change", () => {
+    optionsInput.hidden = typeSelect.value !== "select";
+  });
+  row.querySelector(".ncf-remove").addEventListener("click", () => row.remove());
+  el.newCategoryFields.appendChild(row);
+}
+
+el.newCategoryAddField.addEventListener("click", () => addNewCategoryFieldRow());
+
+el.newCategoryForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  if (!currentUser) return;
+
+  const name = el.newCategoryName.value.trim();
+  if (!name) return;
+  const icon = el.newCategoryIcon.value.trim();
+
+  const fields = [...el.newCategoryFields.querySelectorAll(".new-category-field-row")]
+    .map((row) => {
+      const label = row.querySelector(".ncf-label").value.trim();
+      const type = row.querySelector(".ncf-type").value;
+      const options = row.querySelector(".ncf-options").value
+        .split(",")
+        .map((o) => o.trim())
+        .filter(Boolean);
+      return { label, type, options };
+    })
+    .filter((f) => f.label);
+
+  el.newCategoryError.hidden = true;
+  el.newCategorySubmit.disabled = true;
+  el.newCategorySubmit.textContent = "Création...";
+
+  try {
+    const { data: { session } } = await sb.auth.getSession();
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/create-category`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${session.access_token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ name, icon, fields }),
+    });
+    const payload = await res.json();
+    if (!res.ok) {
+      el.newCategoryError.textContent = payload.error ?? "Erreur lors de la création.";
+      el.newCategoryError.hidden = false;
+      return;
+    }
+
+    closeNewCategoryModal();
+    await loadCategories();
+    selectCategory(payload.category.slug);
+    switchView("catalogue");
+  } catch (err) {
+    el.newCategoryError.textContent = "Erreur réseau, réessaie.";
+    el.newCategoryError.hidden = false;
+  } finally {
+    el.newCategorySubmit.disabled = false;
+    el.newCategorySubmit.textContent = "Créer la collection";
+  }
+});
 
 // ---- recherche globale : toutes catégories confondues, via l'index plein texte serveur
 // (search_vector, tsvector généré sur titre + attributs) — utile dès que le catalogue
@@ -3865,6 +4004,12 @@ function renderDetail() {
   } else if (TMDB_CATEGORIES.includes(cat.slug)) {
     if (detail.genre) html += `<li>Genre : ${escapeHtml(detail.genre)}</li>`;
     if (detail.release_year) html += `<li>Année de sortie : ${escapeHtml(String(detail.release_year))}</li>`;
+  } else if (cat.slug === "tcg") {
+    if (detail.game) html += `<li>Jeu : ${escapeHtml(detail.game)}</li>`;
+    if (detail.set_name) html += `<li>Extension : ${escapeHtml(detail.set_name)}</li>`;
+    if (detail.card_number) html += `<li>Numéro : ${escapeHtml(detail.card_number)}</li>`;
+    if (detail.rarity) html += `<li>Rareté : ${escapeHtml(detail.rarity)}</li>`;
+    if (detail.year) html += `<li>Année : ${escapeHtml(String(detail.year))}</li>`;
   }
   html += `</ul>`;
 
@@ -3876,8 +4021,29 @@ function renderDetail() {
     html += `</ol>`;
   }
 
+  // aperçu audio : pas d'identifiant YouTube fiable sans clé API dédiée, donc on
+  // propose un lien de recherche direct plutôt qu'un lecteur embarqué qui pourrait
+  // pointer vers la mauvaise vidéo
+  if (isDiscogs) {
+    const ytQuery = encodeURIComponent(`${detail.artist ?? ""} ${displayTitle}`.trim());
+    html += `
+      <h3 class="detail-subheading">Écouter</h3>
+      <div class="media-preview">
+        <a class="youtube-listen-link" href="https://www.youtube.com/results?search_query=${ytQuery}" target="_blank" rel="noopener noreferrer">▶️ Écouter des extraits sur YouTube</a>
+      </div>
+    `;
+  }
+
   if (cat.slug === "book" && detail.subjects?.length) {
     html += `<h3 class="detail-subheading">Sujets</h3><p class="detail-description">${escapeHtml(detail.subjects.join(" · "))}</p>`;
+  }
+
+  if (cat.slug === "video_game" && detail.screenshots?.length) {
+    html += `<h3 class="detail-subheading">Aperçu</h3><div class="screenshot-gallery">`;
+    detail.screenshots.forEach((src) => {
+      html += `<img class="screenshot-thumb" src="${src}" alt="" loading="lazy" onerror="this.remove()" />`;
+    });
+    html += `</div>`;
   }
 
   if (TMDB_CATEGORIES.includes(cat.slug) && detail.cast?.length) {
@@ -3886,6 +4052,15 @@ function renderDetail() {
       html += `<li><span class="creator-link" data-artist-id="${escapeHtml(String(c.id))}">${escapeHtml(c.name)}</span>${c.character ? ` <span class="cast-role">(${escapeHtml(c.character)})</span>` : ""}</li>`;
     });
     html += `</ul>`;
+  }
+
+  if (TMDB_CATEGORIES.includes(cat.slug) && detail.trailer_key) {
+    html += `
+      <h3 class="detail-subheading">Bande-annonce</h3>
+      <div class="trailer-embed">
+        <iframe src="https://www.youtube-nocookie.com/embed/${encodeURIComponent(detail.trailer_key)}" title="Bande-annonce" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen loading="lazy"></iframe>
+      </div>
+    `;
   }
 
   if (isDiscogs) {
