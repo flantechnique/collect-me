@@ -18,8 +18,22 @@
 </head>
 <body>
   <header>
-    <h1 id="brand-logo" role="button" tabindex="0">🌾 Glanure</h1>
-    <div id="auth-area"></div>
+    <h1 id="brand-logo" role="button" tabindex="0"><img src="assets/logo-mark.png" alt="" class="brand-logo-icon" />Glanure</h1>
+    <div class="header-right">
+      <div id="notifications-area" class="notifications-area" hidden>
+        <button id="notifications-bell-btn" type="button" class="notifications-bell" aria-label="Notifications">
+          🔔<span id="notifications-badge" class="notifications-badge" hidden>0</span>
+        </button>
+        <div id="notifications-panel" class="notifications-panel" hidden>
+          <div class="notifications-panel-header">
+            <h4>Notifications</h4>
+            <button id="notifications-mark-all-btn" type="button" class="link-btn">Tout marquer lu</button>
+          </div>
+          <div id="notifications-list" class="notifications-list"></div>
+        </div>
+      </div>
+      <div id="auth-area"></div>
+    </div>
   </header>
 
   <nav class="main-nav">
@@ -262,6 +276,53 @@
       </div>
 
       <div class="stats-section">
+        <h3>🔗 Réseaux sociaux</h3>
+        <p class="empty">Affichés comme icônes cliquables sur ta page profil publique.</p>
+        <form id="account-social-form">
+          <label>
+            𝕏 (Twitter)
+            <input id="account-social-x-input" type="text" placeholder="@pseudo ou lien du profil" autocomplete="off" />
+          </label>
+          <label>
+            Facebook
+            <input id="account-social-facebook-input" type="text" placeholder="Lien de la page/profil" autocomplete="off" />
+          </label>
+          <label>
+            Reddit
+            <input id="account-social-reddit-input" type="text" placeholder="@pseudo ou lien du profil" autocomplete="off" />
+          </label>
+          <label>
+            Instagram
+            <input id="account-social-instagram-input" type="text" placeholder="@pseudo ou lien du profil" autocomplete="off" />
+          </label>
+          <div class="actions">
+            <button type="submit">Enregistrer les réseaux sociaux</button>
+          </div>
+          <p id="account-social-status" class="empty" hidden></p>
+        </form>
+      </div>
+
+      <div class="stats-section">
+        <h3>🎮 Plateformes de jeu</h3>
+        <p class="empty">Connecte ta bibliothèque Steam pour importer directement tes jeux possédés dans ton catalogue.</p>
+        <div id="account-steam-linked" hidden>
+          <div class="account-steam-identity">
+            <img id="account-steam-avatar" alt="" hidden />
+            <span id="account-steam-persona"></span>
+          </div>
+          <div class="actions">
+            <button id="account-steam-import-btn" type="button">⬇️ Importer ma bibliothèque Steam</button>
+            <button id="account-steam-unlink-btn" type="button" class="danger-btn">Délier mon compte Steam</button>
+          </div>
+          <p id="account-steam-import-status" class="empty" hidden></p>
+        </div>
+        <div id="account-steam-unlinked">
+          <button id="account-steam-connect-btn" type="button">🎮 Connecter Steam</button>
+        </div>
+        <p class="empty account-epic-note">Epic Games n'offre pas d'accès public à la bibliothèque de ses utilisateurs : l'import automatique n'est donc pas possible pour l'instant.</p>
+      </div>
+
+      <div class="stats-section">
         <h3>🔐 Connexion &amp; mot de passe</h3>
         <p id="account-auth-methods" class="empty"></p>
         <form id="account-password-form">
@@ -334,6 +395,11 @@
           <div>
             <h2 id="showcase-title">Vitrine de collection</h2>
             <p id="showcase-bio" class="empty showcase-bio" hidden></p>
+            <div id="showcase-social-links" class="showcase-social-links" hidden></div>
+            <div id="showcase-follow-row" class="showcase-follow-row" hidden>
+              <span id="showcase-follow-counts" class="showcase-follow-counts"></span>
+              <button id="showcase-follow-btn" type="button" hidden></button>
+            </div>
           </div>
         </div>
         <a href="./" class="tab">← Retour à Glanure</a>
@@ -354,7 +420,20 @@
         <div id="showcase-content"></div>
       </div>
     </section>
+
+    <section id="legal-view" hidden>
+      <button id="legal-back-btn" type="button" class="tab">← Retour</button>
+      <div id="legal-content" class="legal-content"></div>
+    </section>
   </main>
+
+  <footer class="site-footer">
+    <button id="footer-cgu-btn" type="button" class="link-btn">Conditions Générales d'Utilisation</button>
+    <span class="site-footer-sep">·</span>
+    <button id="footer-cgv-btn" type="button" class="link-btn">Conditions Générales de Vente</button>
+    <span class="site-footer-sep">·</span>
+    <span class="site-footer-contact">Contact : flantechnique@proton.me</span>
+  </footer>
 
   <div id="auth-modal" class="auth-modal" hidden>
     <div class="auth-modal-box">
