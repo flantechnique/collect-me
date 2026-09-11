@@ -10,7 +10,7 @@
 // on ne veut ni cacher une réponse d'authentification, ni servir une vieille recherche
 // externe à la place d'un résultat frais.
 
-const SHELL_CACHE = "collect-me-shell-v1";
+const SHELL_CACHE = "glanure-shell-v2";
 const DATA_CACHE = "collect-me-data-v1";
 
 const SHELL_FILES = [
