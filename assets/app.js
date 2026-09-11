@@ -159,6 +159,35 @@ const el = {
   authModalError: document.getElementById("auth-modal-error"),
   authModalSubmit: document.getElementById("auth-modal-submit"),
   authModalToggleMode: document.getElementById("auth-modal-toggle-mode"),
+  notificationsArea: document.getElementById("notifications-area"),
+  notificationsBellBtn: document.getElementById("notifications-bell-btn"),
+  notificationsBadge: document.getElementById("notifications-badge"),
+  notificationsPanel: document.getElementById("notifications-panel"),
+  notificationsList: document.getElementById("notifications-list"),
+  notificationsMarkAllBtn: document.getElementById("notifications-mark-all-btn"),
+  accountSocialForm: document.getElementById("account-social-form"),
+  accountSocialXInput: document.getElementById("account-social-x-input"),
+  accountSocialFacebookInput: document.getElementById("account-social-facebook-input"),
+  accountSocialRedditInput: document.getElementById("account-social-reddit-input"),
+  accountSocialInstagramInput: document.getElementById("account-social-instagram-input"),
+  accountSocialStatus: document.getElementById("account-social-status"),
+  accountSteamLinked: document.getElementById("account-steam-linked"),
+  accountSteamUnlinked: document.getElementById("account-steam-unlinked"),
+  accountSteamAvatar: document.getElementById("account-steam-avatar"),
+  accountSteamPersona: document.getElementById("account-steam-persona"),
+  accountSteamConnectBtn: document.getElementById("account-steam-connect-btn"),
+  accountSteamImportBtn: document.getElementById("account-steam-import-btn"),
+  accountSteamUnlinkBtn: document.getElementById("account-steam-unlink-btn"),
+  accountSteamImportStatus: document.getElementById("account-steam-import-status"),
+  showcaseSocialLinks: document.getElementById("showcase-social-links"),
+  showcaseFollowRow: document.getElementById("showcase-follow-row"),
+  showcaseFollowCounts: document.getElementById("showcase-follow-counts"),
+  showcaseFollowBtn: document.getElementById("showcase-follow-btn"),
+  legalView: document.getElementById("legal-view"),
+  legalContent: document.getElementById("legal-content"),
+  legalBackBtn: document.getElementById("legal-back-btn"),
+  footerCguBtn: document.getElementById("footer-cgu-btn"),
+  footerCgvBtn: document.getElementById("footer-cgv-btn"),
 };
 
 let currentDetail = null;
@@ -309,6 +338,7 @@ async function initAuth() {
 
 function renderAuth() {
   el.authArea.innerHTML = "";
+  el.notificationsArea.hidden = !currentUser;
   if (currentUser) {
     const name = currentUser.user_metadata?.full_name || currentUser.email;
     const span = document.createElement("span");
@@ -322,7 +352,12 @@ function renderAuth() {
     btn.textContent = "Se déconnecter";
     btn.onclick = () => sb.auth.signOut();
     el.authArea.append(span, accountBtn, btn);
+    loadNotifications();
+    subscribeNotifications();
   } else {
+    unsubscribeNotifications();
+  }
+  if (!currentUser) {
     const googleBtn = document.createElement("button");
     googleBtn.type = "button";
     googleBtn.textContent = "Se connecter avec Google";
@@ -338,6 +373,103 @@ function renderAuth() {
     el.authArea.append(googleBtn, emailBtn);
   }
 }
+
+// ---------- notifications (nouveaux items des personnes suivies) ----------
+let notificationsChannel = null;
+let notificationsCache = [];
+
+async function loadNotifications() {
+  if (!currentUser) return;
+  const { data, error } = await sb
+    .from("notifications")
+    .select("*")
+    .eq("user_id", currentUser.id)
+    .order("created_at", { ascending: false })
+    .limit(30);
+  if (error) return;
+  notificationsCache = data ?? [];
+  renderNotifications();
+}
+
+function subscribeNotifications() {
+  unsubscribeNotifications();
+  if (!currentUser) return;
+  notificationsChannel = sb
+    .channel(`notifications-${currentUser.id}`)
+    .on(
+      "postgres_changes",
+      { event: "INSERT", schema: "public", table: "notifications", filter: `user_id=eq.${currentUser.id}` },
+      (payload) => {
+        notificationsCache.unshift(payload.new);
+        notificationsCache = notificationsCache.slice(0, 30);
+        renderNotifications();
+      }
+    )
+    .subscribe();
+}
+
+function unsubscribeNotifications() {
+  if (notificationsChannel) {
+    sb.removeChannel(notificationsChannel);
+    notificationsChannel = null;
+  }
+}
+
+function renderNotifications() {
+  const unreadCount = notificationsCache.filter((n) => !n.read).length;
+  el.notificationsBadge.hidden = unreadCount === 0;
+  el.notificationsBadge.textContent = unreadCount > 9 ? "9+" : String(unreadCount);
+
+  el.notificationsList.innerHTML = "";
+  if (!notificationsCache.length) {
+    el.notificationsList.innerHTML = "<p class='empty'>Aucune notification pour l'instant.</p>";
+    return;
+  }
+  notificationsCache.forEach((n) => {
+    const row = document.createElement("div");
+    row.className = `notification-row${n.read ? "" : " unread"}`;
+    if (n.type === "new_item") {
+      row.innerHTML = `
+        <img src="${n.payload?.cover_image_url ?? ""}" alt="" onerror="this.style.visibility='hidden'" />
+        <div class="notification-text">
+          <strong>${escapeHtml(n.payload?.actor_name ?? "Quelqu'un")}</strong> a ajouté
+          <span>${n.payload?.icon ?? ""} ${escapeHtml(n.payload?.title ?? "un item")}</span> à sa collection
+          <div class="notification-time">${timeAgo(n.created_at)}</div>
+        </div>
+      `;
+    } else {
+      row.innerHTML = `<div class="notification-text">${escapeHtml(n.type)}</div>`;
+    }
+    row.addEventListener("click", async () => {
+      if (!n.read) {
+        n.read = true;
+        renderNotifications();
+        await sb.from("notifications").update({ read: true }).eq("id", n.id);
+      }
+      el.notificationsPanel.hidden = true;
+      if (n.payload?.item_id) openSharedItem(n.payload.item_id);
+    });
+    el.notificationsList.appendChild(row);
+  });
+}
+
+el.notificationsBellBtn.addEventListener("click", () => {
+  el.notificationsPanel.hidden = !el.notificationsPanel.hidden;
+});
+
+el.notificationsMarkAllBtn.addEventListener("click", async () => {
+  const unread = notificationsCache.filter((n) => !n.read);
+  if (!unread.length) return;
+  notificationsCache.forEach((n) => { n.read = true; });
+  renderNotifications();
+  await sb.from("notifications").update({ read: true }).eq("user_id", currentUser.id).eq("read", false);
+});
+
+document.addEventListener("click", (e) => {
+  if (!el.notificationsPanel.hidden && !el.notificationsArea.contains(e.target)) {
+    el.notificationsPanel.hidden = true;
+  }
+});
 
 // ---------- connexion email + mot de passe (en plus de Google) ----------
 let authModalMode = "signin"; // "signin" | "signup"
@@ -1177,6 +1309,8 @@ el.viewFunBtn.addEventListener("click", () => {
 el.detailBack.addEventListener("click", () => switchView("catalogue"));
 el.creatorBack.addEventListener("click", () => switchView("catalogue"));
 
+let lastMainView = "home";
+
 function switchView(view) {
   el.homeView.hidden = view !== "home";
   el.catalogueView.hidden = view !== "catalogue";
@@ -1187,6 +1321,7 @@ function switchView(view) {
   el.creatorView.hidden = view !== "creator";
   el.labelsView.hidden = view !== "labels";
   el.accountView.hidden = view !== "account";
+  el.legalView.hidden = view !== "legal";
   el.viewHomeBtn.classList.toggle("active", view === "home");
   el.viewCollectionBtn.classList.toggle("active", view === "collection");
   el.viewStatsBtn.classList.toggle("active", view === "stats");
@@ -1194,7 +1329,81 @@ function switchView(view) {
   if (view === "collection") loadMyCollection();
   if (view === "stats") loadStats();
   if (view === "fun") loadFunView();
+  if (view !== "legal") lastMainView = view;
 }
+
+// ---------- CGU / CGV ----------
+const CGU_HTML = `
+  <h2>Conditions Générales d'Utilisation</h2>
+  <p class="empty">Dernière mise à jour : ${new Date().toLocaleDateString("fr-FR", { year: "numeric", month: "long", day: "numeric" })}</p>
+
+  <h3>1. Éditeur du site</h3>
+  <p>Le site Glanure (accessible à l'adresse glanure.com) est édité par Flan Technique, éditeur individuel, joignable à l'adresse : <strong>flantechnique@proton.me</strong>.</p>
+
+  <h3>2. Objet</h3>
+  <p>Glanure est un service gratuit permettant à ses utilisateurs de répertorier, suivre et partager leurs collections personnelles (vinyles, CD, DVD/steelbooks, jeux vidéo, livres, timbres, monnaies, affiches de films, etc.). Les présentes Conditions Générales d'Utilisation (CGU) régissent l'accès et l'utilisation du site par tout utilisateur.</p>
+
+  <h3>3. Accès au service</h3>
+  <p>L'accès à certaines fonctionnalités nécessite la création d'un compte, via une connexion Google ou par email et mot de passe. L'utilisateur s'engage à fournir des informations exactes et à maintenir la confidentialité de ses identifiants.</p>
+
+  <h3>4. Contenu utilisateur et catalogue partagé</h3>
+  <p>Le catalogue d'objets (titres, visuels, attributs) est partagé entre tous les utilisateurs : un item ajouté par un utilisateur peut être réutilisé par d'autres pour référencer le même objet, afin d'éviter les doublons. Les informations personnelles de collection (statut possédé/recherché/à vendre, prix, notes, photos personnelles) restent strictement privées, sauf activation volontaire de la vitrine publique par l'utilisateur.</p>
+  <p>L'utilisateur s'engage à ne pas publier de contenu illicite, injurieux, diffamatoire ou portant atteinte aux droits de tiers. Flan Technique se réserve le droit de supprimer tout contenu non conforme et de suspendre ou supprimer le compte d'un utilisateur en cas de manquement grave ou répété.</p>
+
+  <h3>5. Profil public et abonnements</h3>
+  <p>L'utilisateur peut choisir de rendre son profil et sa collection publics via un lien dédié. Il peut alors être suivi par d'autres utilisateurs, qui recevront une notification lors de l'ajout d'un nouvel item à sa collection. Un utilisateur peut désactiver la visibilité publique de son profil à tout moment, ce qui ne supprime pas rétroactivement les abonnements existants.</p>
+
+  <h3>6. Comptes tiers connectés (Google, Steam)</h3>
+  <p>Glanure permet de se connecter via un compte Google, et de lier un compte Steam afin d'importer automatiquement sa bibliothèque de jeux possédés. Cette liaison utilise l'identifiant public Steam de l'utilisateur et, si disponible, son pseudo et son avatar public. Glanure n'accède à aucune autre donnée du compte Steam ou Google de l'utilisateur, et ne publie jamais rien en son nom sur ces plateformes.</p>
+
+  <h3>7. Disponibilité et évolutions</h3>
+  <p>Glanure est un service en développement continu, fourni "en l'état", sans garantie de disponibilité permanente. Flan Technique se réserve le droit de faire évoluer, suspendre ou interrompre tout ou partie du service à tout moment, avec ou sans préavis.</p>
+
+  <h3>8. Responsabilité</h3>
+  <p>Flan Technique ne saurait être tenu responsable des dommages directs ou indirects résultant de l'utilisation du service, d'une interruption de service, d'une perte de données, ou de contenus publiés par des tiers (catalogue partagé, vitrines publiques d'autres utilisateurs).</p>
+
+  <h3>9. Suppression de compte</h3>
+  <p>L'utilisateur peut supprimer définitivement son compte et l'ensemble de ses données personnelles à tout moment depuis la page "Mon compte". Cette action est irréversible.</p>
+
+  <h3>10. Droit applicable</h3>
+  <p>Les présentes CGU sont soumises au droit français. Tout litige relatif à leur interprétation ou leur exécution relève de la compétence des tribunaux français.</p>
+
+  <h3>11. Contact</h3>
+  <p>Pour toute question relative aux présentes CGU : <strong>flantechnique@proton.me</strong>.</p>
+`;
+
+const CGV_HTML = `
+  <h2>Conditions Générales de Vente</h2>
+  <p class="empty">Dernière mise à jour : ${new Date().toLocaleDateString("fr-FR", { year: "numeric", month: "long", day: "numeric" })}</p>
+
+  <h3>1. Vendeur</h3>
+  <p>Le service Glanure est édité par Flan Technique, joignable à l'adresse : <strong>flantechnique@proton.me</strong>.</p>
+
+  <h3>2. Gratuité actuelle du service</h3>
+  <p>À la date de rédaction des présentes, l'ensemble des fonctionnalités de Glanure sont accessibles gratuitement, sans création de compte payant ni transaction financière sur la plateforme. Les présentes Conditions Générales de Vente (CGV) n'ont donc, à ce jour, pas vocation à s'appliquer à une quelconque vente.</p>
+
+  <h3>3. Vitrine "à vendre" entre utilisateurs</h3>
+  <p>Glanure permet à un utilisateur d'indiquer publiquement qu'un item de sa collection est "à vendre", à titre indicatif. Glanure n'intervient à aucun moment dans une éventuelle transaction entre utilisateurs : il n'y a ni paiement, ni livraison, ni garantie gérés par la plateforme. Toute transaction éventuelle entre utilisateurs se fait exclusivement sous leur seule responsabilité, en dehors de Glanure.</p>
+
+  <h3>4. Évolutions futures</h3>
+  <p>Si des fonctionnalités payantes venaient à être proposées à l'avenir (par exemple un abonnement pour des fonctionnalités avancées), les présentes CGV seraient mises à jour en conséquence, avec indication claire des prix, modalités de paiement, droit de rétractation et conditions applicables, conformément à la réglementation en vigueur.</p>
+
+  <h3>5. Droit applicable</h3>
+  <p>Les présentes CGV sont soumises au droit français.</p>
+
+  <h3>6. Contact</h3>
+  <p>Pour toute question relative aux présentes CGV : <strong>flantechnique@proton.me</strong>.</p>
+`;
+
+function openLegalView(which) {
+  el.legalContent.innerHTML = which === "cgv" ? CGV_HTML : CGU_HTML;
+  switchView("legal");
+  window.scrollTo(0, 0);
+}
+
+el.footerCguBtn.addEventListener("click", () => openLegalView("cgu"));
+el.footerCgvBtn.addEventListener("click", () => openLegalView("cgv"));
+el.legalBackBtn.addEventListener("click", () => switchView(lastMainView));
 
 // ---------- recherche externe (Discogs, RAWG...) — dropdown en live ----------
 let searchDebounceTimer = null;
@@ -2236,7 +2445,9 @@ async function openAccountView() {
 
   const { data: profile, error } = await sb
     .from("profiles")
-    .select("username, display_name, bio, avatar_url, banner_url, public_showcase, theme_color")
+    .select(
+      "username, display_name, bio, avatar_url, banner_url, public_showcase, theme_color, social_x, social_facebook, social_reddit, social_instagram, steam_id, steam_persona_name, steam_avatar_url"
+    )
     .eq("id", currentUser.id)
     .maybeSingle();
   if (error) return alert(error.message);
@@ -2250,6 +2461,15 @@ async function openAccountView() {
   updateAccountLinkVisibility(profile?.public_showcase ?? false, profile?.username || null);
   setAccountImagePreview(el.accountAvatarImg, profile?.avatar_url);
   setAccountImagePreview(el.accountBannerImg, profile?.banner_url);
+
+  el.accountSocialXInput.value = profile?.social_x || "";
+  el.accountSocialFacebookInput.value = profile?.social_facebook || "";
+  el.accountSocialRedditInput.value = profile?.social_reddit || "";
+  el.accountSocialInstagramInput.value = profile?.social_instagram || "";
+  el.accountSocialStatus.hidden = true;
+
+  renderAccountSteamSection(profile);
+  el.accountSteamImportStatus.hidden = true;
 
   renderAccountAuthMethods();
 
@@ -2273,6 +2493,116 @@ function updateAccountLinkVisibility(isPublic, username) {
     el.accountLinkInput.value = username ? `${base}?u=${username}` : `${base}?showcase=${currentUser.id}`;
   }
 }
+
+// ---------- réseaux sociaux du profil ----------
+el.accountSocialForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  el.accountSocialStatus.hidden = true;
+  const { error } = await sb.from("profiles").upsert(
+    {
+      id: currentUser.id,
+      social_x: el.accountSocialXInput.value.trim() || null,
+      social_facebook: el.accountSocialFacebookInput.value.trim() || null,
+      social_reddit: el.accountSocialRedditInput.value.trim() || null,
+      social_instagram: el.accountSocialInstagramInput.value.trim() || null,
+    },
+    { onConflict: "id" }
+  );
+  el.accountSocialStatus.textContent = error ? error.message : "Réseaux sociaux enregistrés !";
+  el.accountSocialStatus.hidden = false;
+});
+
+// ---------- plateformes de jeu : Steam ----------
+// Transforme un pseudo/URL brut en URL cliquable pour un réseau donné (accepte un lien
+// complet déjà collé par l'utilisateur, ou juste un pseudo avec ou sans @ / u/).
+function socialLinkUrl(platform, raw) {
+  if (!raw) return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  const handle = trimmed.replace(/^@/, "").replace(/^u\//, "");
+  const builders = {
+    x: (h) => `https://x.com/${h}`,
+    facebook: (h) => `https://facebook.com/${h}`,
+    reddit: (h) => `https://reddit.com/user/${h}`,
+    instagram: (h) => `https://instagram.com/${h}`,
+  };
+  return builders[platform] ? builders[platform](handle) : trimmed;
+}
+
+function renderAccountSteamSection(profile) {
+  const linked = Boolean(profile?.steam_id);
+  el.accountSteamLinked.hidden = !linked;
+  el.accountSteamUnlinked.hidden = linked;
+  if (linked) {
+    el.accountSteamPersona.textContent = profile.steam_persona_name || `Steam #${profile.steam_id}`;
+    if (profile.steam_avatar_url) {
+      el.accountSteamAvatar.src = profile.steam_avatar_url;
+      el.accountSteamAvatar.hidden = false;
+    } else {
+      el.accountSteamAvatar.hidden = true;
+    }
+  }
+}
+
+el.accountSteamConnectBtn.addEventListener("click", async () => {
+  const { data: { session } } = await sb.auth.getSession();
+  if (!session) return alert("Connecte-toi pour lier un compte Steam.");
+  try {
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/steam-link`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${session.access_token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ return_to: `${location.origin}${location.pathname}?view=account` }),
+    });
+    const payload = await res.json();
+    if (!res.ok || !payload.redirect_url) {
+      alert(payload.error || "Impossible de démarrer la connexion Steam pour l'instant.");
+      return;
+    }
+    location.href = payload.redirect_url;
+  } catch (_e) {
+    alert("Impossible de contacter le serveur pour la connexion Steam.");
+  }
+});
+
+el.accountSteamUnlinkBtn.addEventListener("click", async () => {
+  if (!confirm("Délier ton compte Steam ? Les jeux déjà importés resteront dans ta collection.")) return;
+  const { error } = await sb
+    .from("profiles")
+    .upsert({ id: currentUser.id, steam_id: null, steam_persona_name: null, steam_avatar_url: null }, { onConflict: "id" });
+  if (error) return alert(error.message);
+  renderAccountSteamSection({});
+});
+
+el.accountSteamImportBtn.addEventListener("click", async () => {
+  const { data: { session } } = await sb.auth.getSession();
+  if (!session) return;
+  el.accountSteamImportStatus.hidden = false;
+  el.accountSteamImportStatus.textContent = "Import en cours, ça peut prendre quelques instants...";
+  el.accountSteamImportBtn.disabled = true;
+  try {
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/steam-import-library`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${session.access_token}` },
+    });
+    const payload = await res.json();
+    if (!res.ok) {
+      el.accountSteamImportStatus.textContent = payload.error || "Erreur lors de l'import.";
+    } else if (payload.total === 0) {
+      el.accountSteamImportStatus.textContent = payload.note || "Aucun jeu trouvé dans la bibliothèque Steam.";
+    } else {
+      el.accountSteamImportStatus.textContent =
+        `${payload.imported} jeu${payload.imported > 1 ? "x" : ""} importé${payload.imported > 1 ? "s" : ""}` +
+        (payload.already_present ? `, ${payload.already_present} déjà présents` : "") +
+        (payload.truncated ? ` (bibliothèque tronquée aux ${payload.imported + payload.already_present} premiers jeux)` : "") +
+        ".";
+      loadMyCollection();
+    }
+  } catch (_e) {
+    el.accountSteamImportStatus.textContent = "Impossible de contacter le serveur pour l'import.";
+  }
+  el.accountSteamImportBtn.disabled = false;
+});
 
 // upload avatar/bannière : bucket Storage public "profile-images", chemin
 // <user_id>/avatar.<ext> ou <user_id>/banner.<ext> (upsert pour remplacer l'ancien fichier),
@@ -2539,7 +2869,9 @@ async function renderPublicShowcase({ userId, username }) {
 
   let profileQuery = sb
     .from("profiles")
-    .select("id, display_name, public_showcase, username, bio, avatar_url, banner_url, theme_color");
+    .select(
+      "id, display_name, public_showcase, username, bio, avatar_url, banner_url, theme_color, social_x, social_facebook, social_reddit, social_instagram, steam_id, steam_persona_name"
+    );
   profileQuery = username ? profileQuery.eq("username", username) : profileQuery.eq("id", userId);
   const { data: profile, error: profileError } = await profileQuery.maybeSingle();
 
@@ -2573,6 +2905,9 @@ async function renderPublicShowcase({ userId, username }) {
     el.showcaseBanner.hidden = true;
   }
   if (profile.theme_color) applyThemeColor(profile.theme_color);
+
+  renderShowcaseSocialLinks(profile);
+  renderShowcaseFollow(userId);
 
   const [{ data: items, error }, { data: forSaleItems }] = await Promise.all([
     sb.from("public_showcase_items").select("*").eq("user_id", userId),
@@ -2642,6 +2977,88 @@ async function renderPublicShowcase({ userId, username }) {
   });
   el.showcaseContent.innerHTML = "";
   el.showcaseContent.appendChild(grid);
+}
+
+const SOCIAL_ICONS = { x: "𝕏", facebook: "📘", reddit: "👽", instagram: "📸", steam: "🎮" };
+
+function renderShowcaseSocialLinks(profile) {
+  const links = [
+    profile.social_x && { platform: "x", url: socialLinkUrl("x", profile.social_x), label: "X" },
+    profile.social_facebook && { platform: "facebook", url: socialLinkUrl("facebook", profile.social_facebook), label: "Facebook" },
+    profile.social_reddit && { platform: "reddit", url: socialLinkUrl("reddit", profile.social_reddit), label: "Reddit" },
+    profile.social_instagram && { platform: "instagram", url: socialLinkUrl("instagram", profile.social_instagram), label: "Instagram" },
+    profile.steam_id && {
+      platform: "steam",
+      url: `https://steamcommunity.com/profiles/${profile.steam_id}`,
+      label: profile.steam_persona_name || "Steam",
+    },
+  ].filter(Boolean);
+
+  if (!links.length) {
+    el.showcaseSocialLinks.hidden = true;
+    return;
+  }
+  el.showcaseSocialLinks.innerHTML = "";
+  links.forEach(({ platform, url, label }) => {
+    const a = document.createElement("a");
+    a.href = url;
+    a.target = "_blank";
+    a.rel = "noopener noreferrer";
+    a.className = "showcase-social-link";
+    a.title = label;
+    a.innerHTML = `${SOCIAL_ICONS[platform] ?? "🔗"} <span>${escapeHtml(label)}</span>`;
+    el.showcaseSocialLinks.appendChild(a);
+  });
+  el.showcaseSocialLinks.hidden = false;
+}
+
+// ---- abonnement ("follow") à un profil public : compteurs toujours visibles, bouton
+// uniquement si connecté et si ce n'est pas son propre profil ----
+async function renderShowcaseFollow(profileUserId) {
+  const [{ count: followerCount }, { count: followingCount }] = await Promise.all([
+    sb.from("user_follows").select("id", { count: "exact", head: true }).eq("followed_id", profileUserId),
+    sb.from("user_follows").select("id", { count: "exact", head: true }).eq("follower_id", profileUserId),
+  ]);
+  el.showcaseFollowCounts.textContent =
+    `${followerCount ?? 0} abonné${(followerCount ?? 0) > 1 ? "s" : ""} · ${followingCount ?? 0} abonnement${(followingCount ?? 0) > 1 ? "s" : ""}`;
+  el.showcaseFollowRow.hidden = false;
+
+  if (!currentUser || currentUser.id === profileUserId) {
+    el.showcaseFollowBtn.hidden = true;
+    return;
+  }
+
+  const { data: existing } = await sb
+    .from("user_follows")
+    .select("id")
+    .eq("follower_id", currentUser.id)
+    .eq("followed_id", profileUserId)
+    .maybeSingle();
+
+  let followRowId = existing?.id ?? null;
+  const setButtonLabel = () => {
+    el.showcaseFollowBtn.textContent = followRowId ? "✓ Suivi(e) — se désabonner" : "+ Suivre";
+    el.showcaseFollowBtn.classList.toggle("following", Boolean(followRowId));
+  };
+  setButtonLabel();
+  el.showcaseFollowBtn.hidden = false;
+  el.showcaseFollowBtn.onclick = async () => {
+    el.showcaseFollowBtn.disabled = true;
+    if (followRowId) {
+      const { error } = await sb.from("user_follows").delete().eq("id", followRowId);
+      if (!error) followRowId = null;
+    } else {
+      const { data, error } = await sb
+        .from("user_follows")
+        .insert({ follower_id: currentUser.id, followed_id: profileUserId })
+        .select()
+        .single();
+      if (!error) followRowId = data.id;
+    }
+    setButtonLabel();
+    el.showcaseFollowBtn.disabled = false;
+    renderShowcaseFollow(profileUserId);
+  };
 }
 
 // ---- frise chronologique : les items possédés, regroupés par décennie de sortie ----
@@ -3763,15 +4180,43 @@ async function openSharedItem(itemId) {
 }
 
 // ---------- boot ----------
-const showcaseUserId = new URLSearchParams(location.search).get("showcase");
-const showcaseUsername = new URLSearchParams(location.search).get("u");
-const sharedItemId = new URLSearchParams(location.search).get("item");
+const bootParams = new URLSearchParams(location.search);
+const showcaseUserId = bootParams.get("showcase");
+const showcaseUsername = bootParams.get("u");
+const sharedItemId = bootParams.get("item");
+const bootView = bootParams.get("view");
+const steamLinked = bootParams.get("steam_linked");
+const steamError = bootParams.get("steam_error");
+
+if (steamLinked || steamError) {
+  // retour de la connexion Steam : on nettoie l'URL pour éviter de rejouer le message au refresh
+  const cleanUrl = new URL(location.href);
+  cleanUrl.searchParams.delete("steam_linked");
+  cleanUrl.searchParams.delete("steam_error");
+  cleanUrl.searchParams.delete("view");
+  history.replaceState(null, "", cleanUrl.toString());
+}
+
 if (showcaseUserId || showcaseUsername) {
-  // lien de profil public (historique ?showcase=<id> ou nouveau ?u=<pseudo>) : pas d'auth,
-  // pas de catalogue — juste le profil et la collection exposée
-  renderPublicShowcase({ userId: showcaseUserId, username: showcaseUsername });
+  // lien de profil public (historique ?showcase=<id> ou nouveau ?u=<pseudo>) : le visiteur peut
+  // être connecté (pour suivre le profil), mais pas de catalogue à charger sur cette page
+  initAuth().then(() => {
+    renderPublicShowcase({ userId: showcaseUserId, username: showcaseUsername });
+  });
 } else {
-  initAuth();
+  initAuth().then(() => {
+    if (bootView === "account" && currentUser) {
+      openAccountView().then(() => {
+        if (steamLinked) {
+          el.accountSteamImportStatus.hidden = false;
+          el.accountSteamImportStatus.textContent = "Compte Steam lié ! Tu peux maintenant importer ta bibliothèque.";
+        } else if (steamError) {
+          el.accountSteamImportStatus.hidden = false;
+          el.accountSteamImportStatus.textContent = "La connexion Steam a échoué ou a été annulée, réessaie.";
+        }
+      });
+    }
+  });
   loadCategories().then(() => {
     if (sharedItemId) openSharedItem(sharedItemId);
   });
