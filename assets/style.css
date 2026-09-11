@@ -1496,6 +1496,150 @@ form#add-item-form button[type="submit"]:hover { background: var(--accent-hover)
 
 .quiz-next-btn:hover { background: var(--accent); color: #fff8f0; }
 
+/* ---------- mini-jeux : classement ---------- */
+.minigames-leaderboard-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  margin-bottom: 1rem;
+}
+
+.toggle-group {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.leaderboard-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.leaderboard-row {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: 10px;
+  background: rgba(239, 224, 199, 0.35);
+}
+
+.leaderboard-row-self {
+  background: var(--accent-soft);
+  border: 1px solid var(--accent);
+}
+
+.leaderboard-rank {
+  font-weight: 800;
+  color: var(--muted);
+  min-width: 1.6rem;
+}
+
+.leaderboard-avatar {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  object-fit: cover;
+  background: var(--bg-soft);
+}
+
+.leaderboard-name { flex: 1; font-weight: 700; }
+.leaderboard-points { color: var(--accent); font-weight: 800; font-size: 0.85rem; }
+
+/* ---------- mini-jeux : actions et salons ---------- */
+.minigame-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  align-items: center;
+  margin-bottom: 1rem;
+}
+
+.minigame-join-row {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.minigame-join-row input {
+  width: 140px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  padding: 0.5rem 0.7rem;
+  font-family: "Nunito", sans-serif;
+  text-transform: uppercase;
+}
+
+.quiz-round-counter {
+  font-weight: 700;
+  color: var(--muted);
+  font-size: 0.85rem;
+  margin-bottom: 0.6rem;
+}
+
+.quiz-result { text-align: center; padding: 1rem 0; }
+.quiz-result p { font-size: 1.1rem; margin-bottom: 1rem; }
+
+.game-room-lobby { text-align: center; }
+
+.room-code {
+  font-size: 1.6rem;
+  letter-spacing: 0.12em;
+  color: var(--accent);
+}
+
+.room-players-list,
+.room-scoreboard,
+.room-final-scores {
+  list-style: none;
+  padding: 0;
+  margin: 0.8rem 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.room-players-list li,
+.room-scoreboard li,
+.room-final-scores li {
+  background: rgba(239, 224, 199, 0.35);
+  border-radius: 8px;
+  padding: 0.4rem 0.7rem;
+  font-size: 0.88rem;
+  font-weight: 700;
+}
+
+.room-answer-status { margin-top: 0.8rem; }
+
+#room-start-btn {
+  background: var(--accent);
+  color: #fff8f0;
+  border: none;
+  padding: 0.6rem 1.3rem;
+  border-radius: 999px;
+  cursor: pointer;
+  font-family: "Nunito", sans-serif;
+  font-weight: 700;
+  margin: 0.6rem 0.4rem 0 0;
+}
+#room-start-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+#room-start-btn:hover:not(:disabled) { background: var(--accent-hover); }
+
+#room-final-leave-btn {
+  background: var(--accent);
+  color: #fff8f0;
+  border: none;
+  padding: 0.6rem 1.3rem;
+  border-radius: 999px;
+  cursor: pointer;
+  font-family: "Nunito", sans-serif;
+  font-weight: 700;
+}
+
 /* ---------- vitrine publique ---------- */
 .showcase-header {
   display: flex;

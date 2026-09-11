@@ -76,6 +76,17 @@ const el = {
   statsExportReimportBtn: document.getElementById("stats-export-reimport-btn"),
   collectionViewToggle: document.getElementById("collection-view-toggle"),
   viewFunBtn: document.getElementById("view-fun"),
+  viewMinigamesBtn: document.getElementById("view-minigames"),
+  minigamesView: document.getElementById("minigames-view"),
+  lbScopeToggle: document.getElementById("lb-scope-toggle"),
+  lbPeriodToggle: document.getElementById("lb-period-toggle"),
+  minigamesLeaderboardContent: document.getElementById("minigames-leaderboard-content"),
+  quizplaylistSoloBtn: document.getElementById("quizplaylist-solo-btn"),
+  quizplaylistMultiRankedBtn: document.getElementById("quizplaylist-multi-ranked-btn"),
+  quizplaylistMultiCasualBtn: document.getElementById("quizplaylist-multi-casual-btn"),
+  quizplaylistJoinCode: document.getElementById("quizplaylist-join-code"),
+  quizplaylistJoinBtn: document.getElementById("quizplaylist-join-btn"),
+  quizplaylistArea: document.getElementById("quizplaylist-area"),
   funView: document.getElementById("fun-view"),
   recommendationsContent: document.getElementById("recommendations-content"),
   compareInput: document.getElementById("compare-input"),
@@ -1444,6 +1455,10 @@ el.viewFunBtn.addEventListener("click", () => {
   unsubscribeCommunityFeed();
   switchView("fun");
 });
+el.viewMinigamesBtn.addEventListener("click", () => {
+  unsubscribeCommunityFeed();
+  switchView("minigames");
+});
 
 el.detailBack.addEventListener("click", () => switchView("catalogue"));
 el.creatorBack.addEventListener("click", () => switchView("catalogue"));
@@ -1456,6 +1471,7 @@ function switchView(view) {
   el.collectionView.hidden = view !== "collection";
   el.statsView.hidden = view !== "stats";
   el.funView.hidden = view !== "fun";
+  el.minigamesView.hidden = view !== "minigames";
   el.detailView.hidden = view !== "detail";
   el.creatorView.hidden = view !== "creator";
   el.labelsView.hidden = view !== "labels";
@@ -1465,9 +1481,12 @@ function switchView(view) {
   el.viewCollectionBtn.classList.toggle("active", view === "collection");
   el.viewStatsBtn.classList.toggle("active", view === "stats");
   el.viewFunBtn.classList.toggle("active", view === "fun");
+  el.viewMinigamesBtn.classList.toggle("active", view === "minigames");
   if (view === "collection") loadMyCollection();
   if (view === "stats") loadStats();
   if (view === "fun") loadFunView();
+  if (view === "minigames") loadMinigamesView();
+  if (view !== "minigames") leaveGameRoomChannel(); // quitte proprement le salon multijoueur si on change de vue
   if (view !== "legal") lastMainView = view;
 }
 
@@ -3424,6 +3443,621 @@ async function startQuiz() {
 
   el.quizQuestion.innerHTML = "";
   el.quizQuestion.appendChild(wrapper);
+}
+
+// =====================================================================
+// ---------- Mini-jeux : classement + Quizz Playlist (solo & multi) ----------
+// =====================================================================
+//
+// Note de conception (à garder en tête si on étend ce module) :
+// - Le classement (game_score_events) n'enregistre QUE des parties gagnées en mode
+//   "ranked" (solo, toujours classé ; salon multijoueur "classé" explicitement choisi).
+//   Un salon "amical" ne touche jamais au classement.
+// - "Entre amis" = les comptes que TU suis (table user_follows), + toi-même. Pas de
+//   notion d'amitié réciproque pour l'instant.
+// - Multijoueur : un seul salon = un seul "arbitre" (l'hôte), qui construit et pousse
+//   chaque question dans game_rooms.current_question. Pour permettre un vrai mélange
+//   des collections de tous les participants, une policy RLS dédiée autorise l'hôte à
+//   lire la collection des AUTRES participants, mais seulement entre co-équipiers d'un
+//   même salon en cours (status='playing') — jamais en dehors de ce contexte.
+// - Fair-play : comme tous les clients reçoivent current_question (donc la bonne
+//   réponse) via Realtime, un joueur techniquement averti pourrait la lire dans les
+//   requêtes réseau. Accepté ici : app perso entre amis, pas de mode compétitif public.
+//   Ne pas réutiliser ce pattern tel quel pour un jeu grand public.
+
+let quizSoloState = null; // { round, score, pool }
+let currentGameRoom = null; // { room, players, isHost, myAnswerRound, ... }
+let gameRoomChannel = null;
+
+function shuffle(arr) {
+  return [...arr].sort(() => Math.random() - 0.5);
+}
+function pickRandom(arr, n) {
+  return shuffle(arr).slice(0, n);
+}
+
+function loadMinigamesView() {
+  renderLeaderboard();
+  if (!quizSoloState) {
+    el.quizplaylistArea.innerHTML = "";
+  }
+}
+
+// ---------- classement ----------
+let lbScope = "general";
+let lbPeriod = "month";
+
+el.lbScopeToggle.querySelectorAll("button").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    lbScope = btn.dataset.value;
+    [...el.lbScopeToggle.children].forEach((b) => b.classList.toggle("active", b === btn));
+    renderLeaderboard();
+  });
+});
+el.lbPeriodToggle.querySelectorAll("button").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    lbPeriod = btn.dataset.value;
+    [...el.lbPeriodToggle.children].forEach((b) => b.classList.toggle("active", b === btn));
+    renderLeaderboard();
+  });
+});
+
+async function renderLeaderboard() {
+  if (!currentUser) {
+    el.minigamesLeaderboardContent.innerHTML = "<p class='empty'>Connecte-toi pour voir et rejoindre le classement.</p>";
+    return;
+  }
+  el.minigamesLeaderboardContent.innerHTML = "<p class='empty'>Chargement du classement...</p>";
+
+  let query = sb.from("game_score_events").select("user_id, points, played_at");
+  if (lbPeriod === "month") {
+    const now = new Date();
+    query = query.gte("played_at", new Date(now.getFullYear(), now.getMonth(), 1).toISOString());
+  }
+  if (lbScope === "friends") {
+    const { data: follows } = await sb.from("user_follows").select("followed_id").eq("follower_id", currentUser.id);
+    const ids = [...new Set([currentUser.id, ...(follows ?? []).map((f) => f.followed_id)])];
+    query = query.in("user_id", ids);
+  }
+
+  const { data, error } = await query;
+  if (error) {
+    el.minigamesLeaderboardContent.innerHTML = "<p class='empty'>Erreur de chargement du classement.</p>";
+    return;
+  }
+
+  const totals = new Map();
+  (data ?? []).forEach((row) => totals.set(row.user_id, (totals.get(row.user_id) ?? 0) + row.points));
+  const ranked = [...totals.entries()].sort((a, b) => b[1] - a[1]).slice(0, 20);
+
+  if (!ranked.length) {
+    el.minigamesLeaderboardContent.innerHTML = "<p class='empty'>Personne n'a encore marqué de points sur cette période.</p>";
+    return;
+  }
+
+  const { data: identities } = await sb
+    .from("player_identities")
+    .select("*")
+    .in("id", ranked.map(([id]) => id));
+  const identityById = new Map((identities ?? []).map((p) => [p.id, p]));
+
+  const list = document.createElement("ol");
+  list.className = "leaderboard-list";
+  ranked.forEach(([userId, points], i) => {
+    const identity = identityById.get(userId);
+    const name = identity?.display_name || identity?.username || "Joueur";
+    const li = document.createElement("li");
+    li.className = "leaderboard-row" + (userId === currentUser.id ? " leaderboard-row-self" : "");
+    li.innerHTML = `
+      <span class="leaderboard-rank">${i + 1}</span>
+      <img class="leaderboard-avatar" src="${identity?.avatar_url ?? ""}" alt="" onerror="this.style.visibility='hidden'" />
+      <span class="leaderboard-name">${escapeHtml(name)}</span>
+      <span class="leaderboard-points">${points} pt${points > 1 ? "s" : ""}</span>
+    `;
+    list.appendChild(li);
+  });
+  el.minigamesLeaderboardContent.innerHTML = "";
+  el.minigamesLeaderboardContent.appendChild(list);
+}
+
+async function recordGameScore(gameSlug, points) {
+  if (!currentUser || points <= 0) return;
+  await sb.from("game_score_events").insert({ user_id: currentUser.id, game_slug: gameSlug, points });
+}
+
+// ---------- Quizz Playlist : banque de questions partagée solo/multi ----------
+async function buildQuizPlaylistPool() {
+  const entries = collectionEntriesCache.length ? collectionEntriesCache : await fetchCollectionEntries();
+  const owned = entries.filter((e) => e.status === "owned" && DISCOGS_CATEGORIES.includes(e.items.categories.slug));
+  return [...new Map(owned.map((e) => [e.item_id, e.items])).values()];
+}
+
+function attrPool(pool, key) {
+  return pool.filter((i) => i.attributes?.[key]);
+}
+
+function usableQuizTypes(pool) {
+  const types = [];
+  if (attrPool(pool, "artist").length >= 4) types.push("artist");
+  if (attrPool(pool, "pressing_year").length >= 4) types.push("year");
+  if (attrPool(pool, "genre").length >= 4) types.push("genre");
+  if (pool.filter((i) => i.external_ids?.discogs_id).length >= 4) types.push("tracklist");
+  return types;
+}
+
+async function buildQuizPlaylistQuestion(pool) {
+  const types = usableQuizTypes(pool);
+  if (!types.length) return null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const question = await buildQuestionOfType(types[Math.floor(Math.random() * types.length)], pool);
+    if (question) return question;
+  }
+  return null;
+}
+
+async function buildQuestionOfType(type, pool) {
+  if (type === "artist") {
+    const candidates = attrPool(pool, "artist");
+    const target = candidates[Math.floor(Math.random() * candidates.length)];
+    const distractors = [...new Set(candidates.filter((i) => i.attributes.artist !== target.attributes.artist).map((i) => i.attributes.artist))];
+    if (distractors.length < 3) return null;
+    return {
+      prompt: `Quel artiste a sorti l'album « ${target.title} » ?`,
+      options: shuffle([target.attributes.artist, ...pickRandom(distractors, 3)]),
+      correctAnswer: target.attributes.artist,
+    };
+  }
+  if (type === "year") {
+    const candidates = attrPool(pool, "pressing_year");
+    const target = candidates[Math.floor(Math.random() * candidates.length)];
+    const distractors = [...new Set(
+      candidates.filter((i) => String(i.attributes.pressing_year) !== String(target.attributes.pressing_year)).map((i) => String(i.attributes.pressing_year))
+    )];
+    if (distractors.length < 3) return null;
+    return {
+      prompt: `En quelle année est sorti « ${target.title} » ?`,
+      options: shuffle([String(target.attributes.pressing_year), ...pickRandom(distractors, 3)]),
+      correctAnswer: String(target.attributes.pressing_year),
+    };
+  }
+  if (type === "genre") {
+    const candidates = attrPool(pool, "genre");
+    const target = candidates[Math.floor(Math.random() * candidates.length)];
+    const distractors = [...new Set(candidates.filter((i) => i.attributes.genre !== target.attributes.genre).map((i) => i.attributes.genre))];
+    if (distractors.length < 3) return null;
+    return {
+      prompt: `Quel est le genre de « ${target.title} » ?`,
+      options: shuffle([target.attributes.genre, ...pickRandom(distractors, 3)]),
+      correctAnswer: target.attributes.genre,
+    };
+  }
+  if (type === "tracklist") {
+    const candidates = pool.filter((i) => i.external_ids?.discogs_id);
+    const target = candidates[Math.floor(Math.random() * candidates.length)];
+    const { data: { session } } = await sb.auth.getSession();
+    if (!session) return null;
+    try {
+      const res = await fetch(
+        `${SUPABASE_URL}/functions/v1/discogs-search?id=${encodeURIComponent(target.external_ids.discogs_id)}`,
+        { headers: { Authorization: `Bearer ${session.access_token}` } }
+      );
+      const payload = await res.json();
+      const tracklist = payload.detail?.tracklist ?? [];
+      if (!res.ok || tracklist.length < 2) return null;
+      const distractorPool = pool.filter((i) => i.id !== target.id);
+      if (distractorPool.length < 3) return null;
+      return {
+        prompt: "Quel album regroupe ces titres ?",
+        promptExtra: pickRandom(tracklist, 3).map((t) => t.title),
+        options: shuffle([target.title, ...pickRandom(distractorPool, 3).map((i) => i.title)]),
+        correctAnswer: target.title,
+      };
+    } catch (_e) {
+      return null;
+    }
+  }
+  return null;
+}
+
+// ---------- Quizz Playlist : solo (classé, 10 manches) ----------
+el.quizplaylistSoloBtn.addEventListener("click", startQuizPlaylistSolo);
+
+async function startQuizPlaylistSolo() {
+  if (!currentUser) return alert("Connecte-toi pour jouer.");
+  leaveGameRoomChannel();
+  const pool = await buildQuizPlaylistPool();
+  if (pool.length < 4) {
+    el.quizplaylistArea.innerHTML = "<p class='empty'>Il te faut au moins 4 vinyles/CD possédés pour jouer.</p>";
+    return;
+  }
+  quizSoloState = { round: 0, score: 0, pool };
+  await nextQuizPlaylistSoloRound();
+}
+
+async function nextQuizPlaylistSoloRound() {
+  if (!quizSoloState) return;
+  quizSoloState.round++;
+  if (quizSoloState.round > 10) return finishQuizPlaylistSolo();
+
+  el.quizplaylistArea.innerHTML = `<p class="empty">Préparation de la question ${quizSoloState.round}/10...</p>`;
+  const question = await buildQuizPlaylistQuestion(quizSoloState.pool);
+  if (!question) {
+    el.quizplaylistArea.innerHTML = "<p class='empty'>Pas assez de données pour continuer, réessaie plus tard.</p>";
+    quizSoloState = null;
+    return;
+  }
+  renderQuizPlaylistSoloQuestion(question);
+}
+
+function renderQuizPlaylistSoloQuestion(question) {
+  const wrapper = document.createElement("div");
+  wrapper.className = "quiz-round";
+  wrapper.innerHTML = `
+    <p class="quiz-round-counter">Question ${quizSoloState.round}/10 — Score : ${quizSoloState.score}</p>
+    <p>${escapeHtml(question.prompt)}</p>
+    ${question.promptExtra ? `<ul class="quiz-tracks">${question.promptExtra.map((t) => `<li>🎵 ${escapeHtml(t)}</li>`).join("")}</ul>` : ""}
+    <div class="quiz-options"></div>
+  `;
+  const optionsWrap = wrapper.querySelector(".quiz-options");
+  question.options.forEach((opt) => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "quiz-option-btn";
+    btn.textContent = opt;
+    btn.onclick = () => {
+      [...optionsWrap.children].forEach((b) => { b.disabled = true; });
+      const correct = opt === question.correctAnswer;
+      btn.classList.add(correct ? "correct" : "incorrect");
+      if (correct) quizSoloState.score++;
+      else optionsWrap.querySelectorAll(".quiz-option-btn").forEach((b) => { if (b.textContent === question.correctAnswer) b.classList.add("correct"); });
+
+      const nextBtn = document.createElement("button");
+      nextBtn.type = "button";
+      nextBtn.className = "quiz-next-btn";
+      nextBtn.textContent = quizSoloState.round >= 10 ? "Voir le résultat" : "Question suivante";
+      nextBtn.onclick = nextQuizPlaylistSoloRound;
+      wrapper.appendChild(nextBtn);
+    };
+    optionsWrap.appendChild(btn);
+  });
+  el.quizplaylistArea.innerHTML = "";
+  el.quizplaylistArea.appendChild(wrapper);
+}
+
+async function finishQuizPlaylistSolo() {
+  const score = quizSoloState.score;
+  await recordGameScore("quiz_playlist", score);
+  el.quizplaylistArea.innerHTML = `
+    <div class="quiz-result">
+      <p>🎉 Partie terminée : <strong>${score}/10</strong></p>
+      <button type="button" id="quizplaylist-replay-btn">Rejouer</button>
+    </div>
+  `;
+  document.getElementById("quizplaylist-replay-btn").onclick = startQuizPlaylistSolo;
+  quizSoloState = null;
+  renderLeaderboard();
+}
+
+// ---------- Quizz Playlist : salon multijoueur (classé ou amical) ----------
+el.quizplaylistMultiRankedBtn.addEventListener("click", () => createGameRoom("ranked"));
+el.quizplaylistMultiCasualBtn.addEventListener("click", () => createGameRoom("casual"));
+el.quizplaylistJoinBtn.addEventListener("click", joinGameRoomByCode);
+
+function randomRoomCode() {
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // évite 0/O et 1/I, ambigus à l'oral/à l'écrit
+  return Array.from({ length: 6 }, () => chars[Math.floor(Math.random() * chars.length)]).join("");
+}
+
+async function createGameRoom(mode) {
+  if (!currentUser) return alert("Connecte-toi pour créer un salon.");
+  quizSoloState = null;
+  leaveGameRoomChannel();
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const code = randomRoomCode();
+    const { data, error } = await sb
+      .from("game_rooms")
+      .insert({ code, game_slug: "quiz_playlist", mode, host_id: currentUser.id, total_rounds: 10 })
+      .select()
+      .single();
+    if (!error) {
+      await sb.from("game_room_players").insert({
+        room_id: data.id,
+        user_id: currentUser.id,
+        display_name: currentUser.user_metadata?.full_name || currentUser.email,
+        score: 0,
+      });
+      return enterGameRoom(data.id);
+    }
+    if (error.code !== "23505") {
+      el.quizplaylistArea.innerHTML = `<p class="empty">Erreur : ${escapeHtml(error.message)}</p>`;
+      return;
+    }
+  }
+}
+
+async function joinGameRoomByCode() {
+  if (!currentUser) return alert("Connecte-toi pour rejoindre un salon.");
+  const code = el.quizplaylistJoinCode.value.trim().toUpperCase();
+  if (!code) return;
+  quizSoloState = null;
+  leaveGameRoomChannel();
+
+  const { data: room, error } = await sb.from("game_rooms").select("*").eq("code", code).maybeSingle();
+  if (error || !room) {
+    el.quizplaylistArea.innerHTML = "<p class='empty'>Salon introuvable. Vérifie le code.</p>";
+    return;
+  }
+  if (room.status !== "waiting") {
+    el.quizplaylistArea.innerHTML = "<p class='empty'>Cette partie a déjà commencé ou est terminée.</p>";
+    return;
+  }
+  await sb.from("game_room_players").upsert(
+    {
+      room_id: room.id,
+      user_id: currentUser.id,
+      display_name: currentUser.user_metadata?.full_name || currentUser.email,
+      score: 0,
+    },
+    { onConflict: "room_id,user_id" }
+  );
+  await enterGameRoom(room.id);
+}
+
+async function enterGameRoom(roomId) {
+  const { data: room } = await sb.from("game_rooms").select("*").eq("id", roomId).single();
+  if (!room) return;
+  currentGameRoom = { room, players: [], isHost: room.host_id === currentUser.id };
+  await refreshRoomPlayers();
+  subscribeGameRoomChannel(roomId);
+  renderGameRoom();
+}
+
+async function refreshRoomPlayers() {
+  if (!currentGameRoom) return;
+  const { data } = await sb.from("game_room_players").select("*").eq("room_id", currentGameRoom.room.id).order("joined_at");
+  currentGameRoom.players = data ?? [];
+}
+
+function subscribeGameRoomChannel(roomId) {
+  gameRoomChannel = sb
+    .channel(`game-room-${roomId}`)
+    .on(
+      "postgres_changes",
+      { event: "UPDATE", schema: "public", table: "game_rooms", filter: `id=eq.${roomId}` },
+      (payload) => {
+        if (!currentGameRoom) return;
+        currentGameRoom.room = payload.new;
+        currentGameRoom.pointAwardedThisRound = false;
+        currentGameRoom.advancingRound = false;
+        renderGameRoom();
+        if (payload.new.status === "finished") recordMyRoomScoreIfNeeded();
+      }
+    )
+    .on(
+      "postgres_changes",
+      { event: "*", schema: "public", table: "game_room_players", filter: `room_id=eq.${roomId}` },
+      async () => {
+        await refreshRoomPlayers();
+        renderGameRoom();
+      }
+    )
+    .on(
+      "postgres_changes",
+      { event: "INSERT", schema: "public", table: "game_room_answers", filter: `room_id=eq.${roomId}` },
+      (payload) => handleRoomAnswerInsert(payload.new)
+    )
+    .subscribe();
+}
+
+function leaveGameRoomChannel() {
+  if (gameRoomChannel) {
+    sb.removeChannel(gameRoomChannel);
+    gameRoomChannel = null;
+  }
+  currentGameRoom = null;
+}
+
+async function leaveGameRoomForGood() {
+  if (!currentGameRoom) return;
+  const roomId = currentGameRoom.room.id;
+  const wasHost = currentGameRoom.isHost;
+  await sb.from("game_room_players").delete().eq("room_id", roomId).eq("user_id", currentUser.id);
+  // l'hôte qui part clôt le salon : sans lui personne ne peut plus faire avancer les manches
+  if (wasHost) await sb.from("game_rooms").update({ status: "finished" }).eq("id", roomId);
+  leaveGameRoomChannel();
+  el.quizplaylistArea.innerHTML = "";
+}
+
+async function startGameRoom() {
+  if (!currentGameRoom?.isHost) return;
+  const participantIds = currentGameRoom.players.map((p) => p.user_id);
+  const { data, error } = await sb
+    .from("collection_entries")
+    .select("*, items(*, categories(*))")
+    .in("user_id", participantIds)
+    .eq("status", "owned");
+  if (error) {
+    el.quizplaylistArea.innerHTML = `<p class="empty">Erreur : ${escapeHtml(error.message)}</p>`;
+    return;
+  }
+  const owned = (data ?? []).filter((e) => DISCOGS_CATEGORIES.includes(e.items.categories.slug));
+  const pool = [...new Map(owned.map((e) => [e.item_id, e.items])).values()];
+  if (pool.length < 4) {
+    alert("Pas assez de vinyles/CD possédés au total dans le salon pour lancer une partie (4 minimum, tous joueurs confondus).");
+    return;
+  }
+  currentGameRoom.combinedPool = pool;
+  await advanceGameRoomRound(1);
+}
+
+async function advanceGameRoomRound(roundNumber) {
+  if (!currentGameRoom?.isHost) return;
+  const { room, combinedPool } = currentGameRoom;
+
+  if (roundNumber > room.total_rounds) {
+    await sb.from("game_rooms").update({ status: "finished", current_question: null }).eq("id", room.id);
+    return;
+  }
+
+  const question = await buildQuizPlaylistQuestion(combinedPool);
+  if (!question) {
+    await sb.from("game_rooms").update({ status: "finished", current_question: null }).eq("id", room.id);
+    return;
+  }
+
+  await sb
+    .from("game_rooms")
+    .update({
+      status: "playing",
+      current_round: roundNumber,
+      current_question: question,
+      round_deadline: new Date(Date.now() + 20000).toISOString(),
+    })
+    .eq("id", room.id);
+}
+
+function renderGameRoom() {
+  if (!currentGameRoom) return;
+  const { room, players, isHost } = currentGameRoom;
+
+  if (room.status === "waiting") {
+    const wrapper = document.createElement("div");
+    wrapper.className = "game-room-lobby";
+    wrapper.innerHTML = `
+      <p class="empty">${room.mode === "ranked" ? "🏆 Salon classé" : "🎈 Salon amical (non classé)"} — code à partager : <strong class="room-code">${room.code}</strong></p>
+      <ul class="room-players-list">${players.map((p) => `<li>${escapeHtml(p.display_name || "Joueur")}</li>`).join("")}</ul>
+      ${
+        isHost
+          ? `<button type="button" id="room-start-btn" ${players.length < 2 ? "disabled" : ""}>Démarrer la partie${players.length < 2 ? " (2 joueurs min.)" : ""}</button>`
+          : "<p class='empty'>En attente que l'hôte démarre la partie...</p>"
+      }
+      <button type="button" id="room-leave-btn" class="danger-btn">Quitter le salon</button>
+    `;
+    el.quizplaylistArea.innerHTML = "";
+    el.quizplaylistArea.appendChild(wrapper);
+    if (isHost) document.getElementById("room-start-btn").onclick = startGameRoom;
+    document.getElementById("room-leave-btn").onclick = leaveGameRoomForGood;
+    return;
+  }
+
+  if (room.status === "playing") return renderGameRoomRound();
+  if (room.status === "finished") return renderGameRoomResults();
+}
+
+function renderGameRoomRound() {
+  const { room, players } = currentGameRoom;
+  const question = room.current_question;
+  const myAnswered = currentGameRoom.myAnswerRound === room.current_round;
+
+  const wrapper = document.createElement("div");
+  wrapper.className = "quiz-round";
+  const scoreboard = [...players]
+    .sort((a, b) => b.score - a.score)
+    .map((p) => `<li>${escapeHtml(p.display_name || "Joueur")} — ${p.score} pt${p.score > 1 ? "s" : ""}</li>`)
+    .join("");
+  wrapper.innerHTML = `
+    <p class="quiz-round-counter">Manche ${room.current_round}/${room.total_rounds} ${room.mode === "ranked" ? "🏆" : "🎈"}</p>
+    <ul class="room-scoreboard">${scoreboard}</ul>
+    <p>${question ? escapeHtml(question.prompt) : "..."}</p>
+    ${question?.promptExtra ? `<ul class="quiz-tracks">${question.promptExtra.map((t) => `<li>🎵 ${escapeHtml(t)}</li>`).join("")}</ul>` : ""}
+    <div class="quiz-options"></div>
+    <p class="room-answer-status empty"></p>
+  `;
+  const optionsWrap = wrapper.querySelector(".quiz-options");
+  const statusEl = wrapper.querySelector(".room-answer-status");
+
+  if (myAnswered) {
+    statusEl.textContent = "Réponse envoyée, en attente des autres joueurs...";
+  } else if (question) {
+    question.options.forEach((opt) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "quiz-option-btn";
+      btn.textContent = opt;
+      btn.onclick = () => submitRoomAnswer(opt, question.correctAnswer);
+      optionsWrap.appendChild(btn);
+    });
+  }
+
+  el.quizplaylistArea.innerHTML = "";
+  el.quizplaylistArea.appendChild(wrapper);
+}
+
+async function submitRoomAnswer(answer, correctAnswer) {
+  if (!currentGameRoom) return;
+  const round = currentGameRoom.room.current_round;
+  if (currentGameRoom.myAnswerRound === round) return;
+  currentGameRoom.myAnswerRound = round;
+  renderGameRoomRound();
+  await sb.from("game_room_answers").insert({
+    room_id: currentGameRoom.room.id,
+    round_number: round,
+    user_id: currentUser.id,
+    answer,
+    is_correct: answer === correctAnswer,
+  });
+}
+
+async function handleRoomAnswerInsert(answerRow) {
+  if (!currentGameRoom || answerRow.room_id !== currentGameRoom.room.id) return;
+  if (answerRow.round_number !== currentGameRoom.room.current_round) return;
+
+  const { data: roundAnswers } = await sb
+    .from("game_room_answers")
+    .select("*")
+    .eq("room_id", currentGameRoom.room.id)
+    .eq("round_number", currentGameRoom.room.current_round)
+    .order("answered_at", { ascending: true });
+
+  const firstCorrect = (roundAnswers ?? []).find((a) => a.is_correct);
+  if (firstCorrect && firstCorrect.user_id === currentUser.id && !currentGameRoom.pointAwardedThisRound) {
+    currentGameRoom.pointAwardedThisRound = true;
+    const me = currentGameRoom.players.find((p) => p.user_id === currentUser.id);
+    if (me) {
+      await sb
+        .from("game_room_players")
+        .update({ score: me.score + 1 })
+        .eq("room_id", currentGameRoom.room.id)
+        .eq("user_id", currentUser.id);
+    }
+  }
+
+  if (currentGameRoom.isHost && !currentGameRoom.advancingRound) {
+    const everyoneAnswered = (roundAnswers ?? []).length >= currentGameRoom.players.length;
+    if (firstCorrect || everyoneAnswered) {
+      currentGameRoom.advancingRound = true;
+      setTimeout(() => {
+        if (currentGameRoom) advanceGameRoomRound(currentGameRoom.room.current_round + 1);
+      }, 2500);
+    }
+  }
+}
+
+async function recordMyRoomScoreIfNeeded() {
+  if (!currentGameRoom || currentGameRoom.scoreRecorded) return;
+  currentGameRoom.scoreRecorded = true;
+  if (currentGameRoom.room.mode !== "ranked") return;
+  const me = currentGameRoom.players.find((p) => p.user_id === currentUser.id);
+  if (me && me.score > 0) await recordGameScore("quiz_playlist", me.score);
+}
+
+function renderGameRoomResults() {
+  const players = [...currentGameRoom.players].sort((a, b) => b.score - a.score);
+  const wrapper = document.createElement("div");
+  wrapper.className = "quiz-result";
+  wrapper.innerHTML = `
+    <p>🏁 Partie terminée !</p>
+    <ol class="room-final-scores">
+      ${players.map((p) => `<li>${escapeHtml(p.display_name || "Joueur")} — ${p.score} pt${p.score > 1 ? "s" : ""}</li>`).join("")}
+    </ol>
+    <button type="button" id="room-final-leave-btn">Retour</button>
+  `;
+  el.quizplaylistArea.innerHTML = "";
+  el.quizplaylistArea.appendChild(wrapper);
+  document.getElementById("room-final-leave-btn").onclick = () => {
+    leaveGameRoomForGood();
+    renderLeaderboard();
+  };
 }
 
 // ---------- helpers ----------
