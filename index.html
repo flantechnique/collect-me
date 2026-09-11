@@ -41,6 +41,7 @@
     <button id="view-collection">Ma collection</button>
     <button id="view-stats">Statistiques</button>
     <button id="view-fun">Découvrir</button>
+    <button id="view-minigames">🕹️ Mini-jeux</button>
   </nav>
 
   <main>
@@ -202,6 +203,50 @@
         <h3>🎧 Quiz tracklist</h3>
         <button id="quiz-start-btn" type="button">Lancer le quiz</button>
         <div id="quiz-question"></div>
+      </div>
+    </section>
+
+    <section id="minigames-view" hidden>
+      <h2>🕹️ Mini-jeux</h2>
+
+      <div class="stats-section">
+        <h3>🏆 Classement</h3>
+        <div class="minigames-leaderboard-controls">
+          <div class="toggle-group" id="lb-scope-toggle">
+            <button type="button" class="tab active" data-value="general">Général</button>
+            <button type="button" class="tab" data-value="friends">Entre amis</button>
+          </div>
+          <div class="toggle-group" id="lb-period-toggle">
+            <button type="button" class="tab active" data-value="month">Ce mois-ci</button>
+            <button type="button" class="tab" data-value="all">Depuis le début</button>
+          </div>
+        </div>
+        <div id="minigames-leaderboard-content"></div>
+      </div>
+
+      <div class="stats-section">
+        <h3>🎧 Quizz Playlist</h3>
+        <p class="empty">10 questions sur tes vinyles/CD possédés : artiste, année, genre, album d'un titre...</p>
+        <div class="minigame-actions">
+          <button type="button" id="quizplaylist-solo-btn">▶️ Jouer en solo (classé)</button>
+          <button type="button" id="quizplaylist-multi-ranked-btn">🏆 Créer un salon classé</button>
+          <button type="button" id="quizplaylist-multi-casual-btn">🎈 Créer un salon amical (non classé)</button>
+          <div class="minigame-join-row">
+            <input type="text" id="quizplaylist-join-code" placeholder="Code du salon" maxlength="6" autocomplete="off" />
+            <button type="button" id="quizplaylist-join-btn">Rejoindre</button>
+          </div>
+        </div>
+        <div id="quizplaylist-area"></div>
+      </div>
+
+      <div class="stats-section">
+        <h3>🖼️ Pixel Guess</h3>
+        <p class="empty">Devine l'objet caché derrière une image pixelisée. Bientôt disponible.</p>
+      </div>
+
+      <div class="stats-section">
+        <h3>🕵️ C'est à qui ça ?</h3>
+        <p class="empty">Devine à qui appartient cet objet, parmi tes amis. Bientôt disponible.</p>
       </div>
     </section>
 
