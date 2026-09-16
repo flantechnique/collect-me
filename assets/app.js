@@ -78,6 +78,7 @@ const el = {
   collectionView: document.getElementById("collection-view"),
   catalogueList: document.getElementById("catalogue-list"),
   collectionList: document.getElementById("collection-list"),
+  collectionOfflineNotice: document.getElementById("collection-offline-notice"),
   addItemForm: document.getElementById("add-item-form"),
   addItemFields: document.getElementById("add-item-fields"),
   addItemTitle: document.getElementById("add-item-title"),
@@ -504,6 +505,7 @@ async function initAuth() {
   renderAuth();
   setupNativePush();
   setupNativeAuthCallback();
+  setupNativeShortcuts();
 
   sb.auth.onAuthStateChange((_event, session) => {
     currentUser = session?.user ?? null;
@@ -598,6 +600,32 @@ function setupNativeAuthCallback() {
     } finally {
       Browser?.close().catch(() => {});
     }
+  });
+}
+
+// ---------- raccourcis d'icône Android (Phase 15bis, wrapper mobile Capacitor) ----------
+// Un appui long sur l'icône de l'app dans le launcher Android propose des raccourcis statiques
+// (déclarés nativement dans android/res/xml/shortcuts.xml, voir le README du wrapper mobile) qui
+// pointent chacun vers com.glanure.app://shortcut/<vue> — le même schéma d'URL personnalisé déjà
+// utilisé pour le retour de connexion Google ci-dessus, donc aucune configuration native
+// supplémentaire au-delà de celle déjà en place pour l'intent-filter. Jamais déclenché sur le
+// site web classique (pas de plugin `App` en dehors de l'app native).
+let nativeShortcutsSetup = false;
+function setupNativeShortcuts() {
+  if (!window.Capacitor?.isNativePlatform?.() || nativeShortcutsSetup) return;
+  const { App } = window.Capacitor.Plugins ?? {};
+  if (!App) return;
+  nativeShortcutsSetup = true;
+
+  App.addListener("appUrlOpen", ({ url }) => {
+    if (!url || !url.startsWith("com.glanure.app://shortcut/")) return;
+    const target = url.slice("com.glanure.app://shortcut/".length).split(/[?#]/)[0];
+    unsubscribeCommunityFeed();
+    if (target === "collection") switchView("collection");
+    else if (target === "search") {
+      switchView("home");
+      setTimeout(() => el.globalSearchInput?.focus(), 300);
+    } else if (target === "minigames") switchView("minigames");
   });
 }
 
@@ -1627,17 +1655,53 @@ async function addToCollection(itemId, status) {
 let bulkSelection = new Set(); // clés "item_id:status"
 let lastRenderedGroups = new Map(); // clé -> { item, status, entryIds }
 
+// ---------- cache hors-ligne de la collection (Phase 15bis, wrapper mobile Capacitor) ----------
+// Utile uniquement dans l'app native : contrairement au site web (qui bénéficie du service
+// worker pour ses lectures Supabase, voir sw.js), l'app mobile n'a pas de service worker
+// (inutile : les fichiers sont déjà embarqués nativement). Sans réseau, l'appel Supabase
+// ci-dessous échoue simplement — on retombe alors sur la dernière version réussie de la
+// collection, gardée en local (par utilisateur, dans localStorage).
+function collectionCacheKey(userId) {
+  return `glanure-collection-cache:${userId}`;
+}
+function readCollectionCache(userId) {
+  try {
+    const raw = localStorage.getItem(collectionCacheKey(userId));
+    return raw ? JSON.parse(raw) : null;
+  } catch (_e) {
+    return null;
+  }
+}
+function writeCollectionCache(userId, data) {
+  try {
+    localStorage.setItem(collectionCacheKey(userId), JSON.stringify(data));
+  } catch (_e) {
+    // quota dépassé ou navigation privée : tant pis, pas de cache hors-ligne cette fois
+  }
+}
+
 async function loadMyCollection() {
   if (!currentUser) {
     el.collectionList.innerHTML = "<p class='empty'>Connecte-toi pour voir ta collection.</p>";
     return;
   }
-  const { data, error } = await sb
+  const isNative = window.Capacitor?.isNativePlatform?.();
+  let { data, error } = await sb
     .from("collection_entries")
     .select("*, items(*, categories(*))")
     .eq("user_id", currentUser.id)
     .order("created_at", { ascending: false });
-  if (error) return console.error(error);
+
+  let offline = false;
+  if (error) {
+    const cached = isNative ? readCollectionCache(currentUser.id) : null;
+    if (!cached) return console.error(error);
+    data = cached;
+    offline = true;
+  } else if (isNative) {
+    writeCollectionCache(currentUser.id, data);
+  }
+  el.collectionOfflineNotice.hidden = !offline;
 
   await fetchItemPriceStats(data.map((entry) => entry.item_id));
 
@@ -3646,16 +3710,11 @@ el.wrappedGenerateBtn.addEventListener("click", async () => {
       <div><div class="wrapped-stat-value">${totalOwned}</div><div class="wrapped-stat-label">items au total</div></div>
     </div>
     <p>Premier ajout de l'année : ${escapeHtml(first.items.title)}${sorted.length > 1 ? ` — dernier en date : ${escapeHtml(last.items.title)}` : ""}</p>
-    <button type="button" class="wrapped-copy-btn">📋 Copier en texte</button>
+    <button type="button" class="wrapped-copy-btn">🔗 Partager</button>
   `;
-  card.querySelector(".wrapped-copy-btn").addEventListener("click", async () => {
+  card.querySelector(".wrapped-copy-btn").addEventListener("click", (e) => {
     const text = `📊 Mon année ${year} en collection sur Glanure :\n${addedThisYear.length} nouveaux items, dont surtout ${topCategory[0]} (${topCategory[1]})\n${totalOwned} items au total dans ma collection !`;
-    try {
-      await navigator.clipboard.writeText(text);
-      alert("Copié !");
-    } catch (_e) {
-      alert(text);
-    }
+    shareOrCopy({ title: "Mon année en collection", text }, e.currentTarget);
   });
   el.wrappedContent.innerHTML = "";
   el.wrappedContent.appendChild(card);
@@ -4146,15 +4205,8 @@ el.accountProfileForm.addEventListener("submit", async (e) => {
   el.accountProfileStatus.hidden = false;
 });
 
-el.accountLinkCopyBtn.addEventListener("click", async () => {
-  try {
-    await navigator.clipboard.writeText(el.accountLinkInput.value);
-    const original = el.accountLinkCopyBtn.textContent;
-    el.accountLinkCopyBtn.textContent = "Copié !";
-    setTimeout(() => { el.accountLinkCopyBtn.textContent = original; }, 1500);
-  } catch (_e) {
-    el.accountLinkInput.select();
-  }
+el.accountLinkCopyBtn.addEventListener("click", () => {
+  shareOrCopy({ title: "Ma collection sur Glanure", url: el.accountLinkInput.value }, el.accountLinkCopyBtn);
 });
 
 // ---- connexion & mot de passe : un compte connecté (via Google ou email) peut définir/
@@ -6559,24 +6611,50 @@ async function renderLocalItemDetail(item, cat) {
   renderOwnershipCounts(el.detailContent, item.id);
 }
 
-// bouton "Partager" réutilisé sur la fiche locale et la fiche externe riche : copie un lien
-// ?item=<id> qui rouvre toujours la fiche LOCALE (jamais d'appel API externe), donc utilisable
-// par un visiteur non connecté sans déclencher l'exigence d'authentification des recherches externes
+// ---------- partage natif (Phase 15bis, wrapper mobile Capacitor + Web Share API) ----------
+// Utilisé partout où on propose de partager un lien : dans l'app mobile, ouvre la feuille de
+// partage native Android (SMS, WhatsApp, email...) via le plugin `@capacitor/share` ; sur le web
+// mobile qui supporte l'API standard Web Share, la même feuille système ; en dernier recours
+// (desktop, anciens navigateurs), on retombe sur la copie presse-papiers déjà en place partout.
+async function shareOrCopy({ title, text, url }, btn) {
+  const nativeShare = window.Capacitor?.isNativePlatform?.() ? window.Capacitor.Plugins?.Share : null;
+  try {
+    if (nativeShare) {
+      await nativeShare.share({ title, text, url });
+      return;
+    }
+    if (navigator.share) {
+      await navigator.share({ title, text, url });
+      return;
+    }
+  } catch (e) {
+    if (e?.name === "AbortError") return; // partage annulé par l'utilisateur, rien à faire
+    // sinon (échec du partage natif) : on retombe sur la copie presse-papiers ci-dessous
+  }
+  const toCopy = url || text;
+  try {
+    await navigator.clipboard.writeText(toCopy);
+    if (btn) {
+      const original = btn.textContent;
+      btn.textContent = "Copié !";
+      setTimeout(() => { btn.textContent = original; }, 1500);
+    } else {
+      alert("Copié !");
+    }
+  } catch (_e) {
+    prompt("Copie ce lien :", toCopy);
+  }
+}
+
+// bouton "Partager" réutilisé sur la fiche locale et la fiche externe riche : partage (ou copie
+// en repli) un lien ?item=<id> qui rouvre toujours la fiche LOCALE (jamais d'appel API externe),
+// donc utilisable par un visiteur non connecté sans déclencher l'exigence d'authentification des
+// recherches externes
 function buildShareButton(itemId) {
   const btn = document.createElement("button");
   btn.type = "button";
   btn.textContent = "🔗 Partager cette fiche";
-  btn.onclick = async () => {
-    const url = `${location.origin}${location.pathname}?item=${itemId}`;
-    try {
-      await navigator.clipboard.writeText(url);
-      const original = btn.textContent;
-      btn.textContent = "Copié !";
-      setTimeout(() => { btn.textContent = original; }, 1500);
-    } catch (_e) {
-      prompt("Copie ce lien :", url);
-    }
-  };
+  btn.onclick = () => shareOrCopy({ title: "Glanure", url: `${location.origin}${location.pathname}?item=${itemId}` }, btn);
   return btn;
 }
 
