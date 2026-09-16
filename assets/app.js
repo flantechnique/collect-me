@@ -279,6 +279,43 @@ const el = {
   legalBackBtn: document.getElementById("legal-back-btn"),
   footerCguBtn: document.getElementById("footer-cgu-btn"),
   footerCgvBtn: document.getElementById("footer-cgv-btn"),
+  viewPlaylistsBtn: document.getElementById("view-playlists"),
+  playlistsView: document.getElementById("playlists-view"),
+  playlistsListPanel: document.getElementById("playlists-list-panel"),
+  playlistCreateToggleBtn: document.getElementById("playlist-create-toggle-btn"),
+  playlistJoinCodeInput: document.getElementById("playlist-join-code-input"),
+  playlistJoinBtn: document.getElementById("playlist-join-btn"),
+  playlistJoinStatus: document.getElementById("playlist-join-status"),
+  playlistCreateForm: document.getElementById("playlist-create-form"),
+  playlistCreateName: document.getElementById("playlist-create-name"),
+  playlistCreateDescription: document.getElementById("playlist-create-description"),
+  playlistCreatePublic: document.getElementById("playlist-create-public"),
+  playlistCreateCancelBtn: document.getElementById("playlist-create-cancel-btn"),
+  playlistsOwnedList: document.getElementById("playlists-owned-list"),
+  playlistsMemberList: document.getElementById("playlists-member-list"),
+  playlistDetailPanel: document.getElementById("playlist-detail-panel"),
+  playlistDetailBackBtn: document.getElementById("playlist-detail-back-btn"),
+  playlistDetailName: document.getElementById("playlist-detail-name"),
+  playlistDetailDescription: document.getElementById("playlist-detail-description"),
+  playlistDetailOwnerActions: document.getElementById("playlist-detail-owner-actions"),
+  playlistTogglePublicBtn: document.getElementById("playlist-toggle-public-btn"),
+  playlistDeleteBtn: document.getElementById("playlist-delete-btn"),
+  playlistLeaveBtn: document.getElementById("playlist-leave-btn"),
+  playlistShareRow: document.getElementById("playlist-share-row"),
+  playlistPublicLinkRow: document.getElementById("playlist-public-link-row"),
+  playlistPublicLinkInput: document.getElementById("playlist-public-link-input"),
+  playlistPublicLinkCopyBtn: document.getElementById("playlist-public-link-copy-btn"),
+  playlistInviteCode: document.getElementById("playlist-invite-code"),
+  playlistInviteCodeCopyBtn: document.getElementById("playlist-invite-code-copy-btn"),
+  playlistMembersList: document.getElementById("playlist-members-list"),
+  playlistAddItemWrapper: document.getElementById("playlist-add-item-wrapper"),
+  playlistAddItemInput: document.getElementById("playlist-add-item-input"),
+  playlistAddItemResults: document.getElementById("playlist-add-item-results"),
+  playlistDetailItems: document.getElementById("playlist-detail-items"),
+  playlistPublicView: document.getElementById("playlist-public-view"),
+  playlistPublicName: document.getElementById("playlist-public-name"),
+  playlistPublicDescription: document.getElementById("playlist-public-description"),
+  playlistPublicContent: document.getElementById("playlist-public-content"),
 };
 
 // Initialisation du thème clair/sombre (fonctions définies plus haut) : doit avoir lieu
@@ -2218,6 +2255,10 @@ el.viewMinigamesBtn.addEventListener("click", () => {
   unsubscribeCommunityFeed();
   switchView("minigames");
 });
+el.viewPlaylistsBtn.addEventListener("click", () => {
+  unsubscribeCommunityFeed();
+  switchView("playlists");
+});
 
 el.detailBack.addEventListener("click", () => switchView("catalogue"));
 el.creatorBack.addEventListener("click", () => switchView("catalogue"));
@@ -2236,11 +2277,13 @@ function switchView(view) {
   el.labelsView.hidden = view !== "labels";
   el.accountView.hidden = view !== "account";
   el.legalView.hidden = view !== "legal";
+  el.playlistsView.hidden = view !== "playlists";
   el.viewHomeBtn.classList.toggle("active", view === "home");
   el.viewCollectionBtn.classList.toggle("active", view === "collection");
   el.viewStatsBtn.classList.toggle("active", view === "stats");
   el.viewFunBtn.classList.toggle("active", view === "fun");
   el.viewMinigamesBtn.classList.toggle("active", view === "minigames");
+  el.viewPlaylistsBtn.classList.toggle("active", view === "playlists");
   if (view === "home") {
     renderHomeResume();
     renderHomeMinigamesTile();
@@ -2253,8 +2296,384 @@ function switchView(view) {
     loadFunView();
   }
   if (view === "minigames") loadMinigamesView();
+  if (view === "playlists") openPlaylistsListView();
+  if (view !== "playlists") leavePlaylistChannel(); // quitte proprement le suivi temps réel de la liste ouverte
   if (view !== "minigames") leaveGameRoomChannel(); // quitte proprement le salon multijoueur si on change de vue
   if (view !== "legal") lastMainView = view;
+}
+
+// ---------- listes personnalisées ("playlists" d'items, Phase 16bis) ----------
+// Listes que l'utilisateur crée et remplit avec des items du catalogue (pas forcément dans sa
+// propre collection), partageables via un lien public en lecture, et collaboratives via un code
+// d'invitation (sur le modèle des salons de mini-jeux) : plusieurs contributeurs peuvent ajouter
+// des items à la même liste, avec mise à jour en direct via Supabase Realtime.
+let currentPlaylist = null; // { row, isOwner, isMember }
+let playlistChannel = null;
+let playlistAddItemToken = 0;
+let playlistAddItemDebounce = null;
+
+async function openPlaylistsListView() {
+  el.playlistDetailPanel.hidden = true;
+  el.playlistsListPanel.hidden = false;
+  if (!currentUser) {
+    el.playlistsOwnedList.innerHTML = "<p class='empty'>Connecte-toi pour créer ou rejoindre des listes.</p>";
+    el.playlistsMemberList.innerHTML = "";
+    return;
+  }
+  await loadPlaylists();
+}
+
+async function loadPlaylists() {
+  const [{ data: owned, error: ownedError }, { data: memberRows, error: memberError }] = await Promise.all([
+    sb.from("playlists").select("*").eq("owner_user_id", currentUser.id).order("created_at", { ascending: false }),
+    sb.from("playlist_members").select("playlists(*)").eq("user_id", currentUser.id),
+  ]);
+  if (ownedError) return (el.playlistsOwnedList.innerHTML = `<p class='empty'>${escapeHtml(ownedError.message)}</p>`);
+  renderPlaylistList(el.playlistsOwnedList, owned ?? [], "Pas encore de liste — crée la première !");
+  const memberPlaylists = (memberRows ?? []).map((r) => r.playlists).filter(Boolean);
+  if (memberError) return (el.playlistsMemberList.innerHTML = `<p class='empty'>${escapeHtml(memberError.message)}</p>`);
+  renderPlaylistList(el.playlistsMemberList, memberPlaylists, "Aucune liste rejointe pour l'instant.");
+}
+
+function renderPlaylistList(container, playlists, emptyLabel) {
+  if (!playlists.length) {
+    container.innerHTML = `<p class="empty">${escapeHtml(emptyLabel)}</p>`;
+    return;
+  }
+  container.innerHTML = "";
+  playlists.forEach((pl) => {
+    const card = document.createElement("div");
+    card.className = "card playlist-card";
+    card.innerHTML = `
+      <h3>${pl.is_public ? "🌍 " : "🔒 "}${escapeHtml(pl.name)}</h3>
+      ${pl.description ? `<p class="empty">${escapeHtml(pl.description)}</p>` : ""}
+    `;
+    card.addEventListener("click", () => openPlaylistDetail(pl.id));
+    container.appendChild(card);
+  });
+}
+
+el.playlistCreateToggleBtn.addEventListener("click", () => {
+  el.playlistCreateForm.hidden = !el.playlistCreateForm.hidden;
+});
+el.playlistCreateCancelBtn.addEventListener("click", () => {
+  el.playlistCreateForm.hidden = true;
+  el.playlistCreateForm.reset();
+});
+el.playlistCreateForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  if (!currentUser) return alert("Connecte-toi pour créer une liste.");
+  const name = el.playlistCreateName.value.trim();
+  if (!name) return;
+  const { data, error } = await sb
+    .from("playlists")
+    .insert({
+      owner_user_id: currentUser.id,
+      name,
+      description: el.playlistCreateDescription.value.trim() || null,
+      is_public: el.playlistCreatePublic.checked,
+    })
+    .select()
+    .single();
+  if (error) return alert(error.message);
+  el.playlistCreateForm.hidden = true;
+  el.playlistCreateForm.reset();
+  openPlaylistDetail(data.id);
+});
+
+el.playlistJoinBtn.addEventListener("click", async () => {
+  if (!currentUser) return alert("Connecte-toi pour rejoindre une liste.");
+  const code = el.playlistJoinCodeInput.value.trim().toUpperCase();
+  if (!code) return;
+  el.playlistJoinStatus.hidden = false;
+  el.playlistJoinStatus.textContent = "Recherche...";
+  const { data: playlist, error } = await sb.from("playlists").select("*").eq("invite_code", code).maybeSingle();
+  if (error || !playlist) {
+    el.playlistJoinStatus.textContent = "Liste introuvable — vérifie le code.";
+    return;
+  }
+  if (playlist.owner_user_id !== currentUser.id) {
+    const { error: joinError } = await sb
+      .from("playlist_members")
+      .upsert({ playlist_id: playlist.id, user_id: currentUser.id }, { onConflict: "playlist_id,user_id" });
+    if (joinError) {
+      el.playlistJoinStatus.textContent = joinError.message;
+      return;
+    }
+  }
+  el.playlistJoinStatus.hidden = true;
+  el.playlistJoinCodeInput.value = "";
+  openPlaylistDetail(playlist.id);
+});
+
+el.playlistDetailBackBtn.addEventListener("click", () => {
+  leavePlaylistChannel();
+  openPlaylistsListView();
+});
+
+async function openPlaylistDetail(playlistId) {
+  if (!currentUser) return alert("Connecte-toi pour voir cette liste.");
+  const { data: playlist, error } = await sb.from("playlists").select("*").eq("id", playlistId).maybeSingle();
+  if (error || !playlist) return alert("Liste introuvable.");
+  const isOwner = playlist.owner_user_id === currentUser.id;
+  let isMember = isOwner;
+  if (!isOwner) {
+    const { data: membership } = await sb
+      .from("playlist_members")
+      .select("playlist_id")
+      .eq("playlist_id", playlistId)
+      .eq("user_id", currentUser.id)
+      .maybeSingle();
+    isMember = !!membership;
+  }
+  currentPlaylist = { row: playlist, isOwner, isMember };
+  el.playlistsListPanel.hidden = true;
+  el.playlistDetailPanel.hidden = false;
+  await renderPlaylistDetail();
+  subscribePlaylistChannel(playlistId);
+}
+
+async function renderPlaylistDetail() {
+  if (!currentPlaylist) return;
+  const { row: playlist, isOwner, isMember } = currentPlaylist;
+  el.playlistDetailName.textContent = `${playlist.is_public ? "🌍" : "🔒"} ${playlist.name}`;
+  if (playlist.description) {
+    el.playlistDetailDescription.textContent = playlist.description;
+    el.playlistDetailDescription.hidden = false;
+  } else {
+    el.playlistDetailDescription.hidden = true;
+  }
+
+  el.playlistDetailOwnerActions.hidden = !isOwner;
+  el.playlistLeaveBtn.hidden = isOwner || !isMember;
+  el.playlistAddItemWrapper.hidden = !(isOwner || isMember);
+  if (isOwner) {
+    el.playlistTogglePublicBtn.textContent = playlist.is_public ? "🔒 Rendre privée" : "🌍 Rendre publique";
+  }
+
+  el.playlistShareRow.hidden = false;
+  el.playlistInviteCode.textContent = playlist.invite_code;
+  if (playlist.is_public) {
+    el.playlistPublicLinkRow.hidden = false;
+    el.playlistPublicLinkInput.value = `${location.origin}${location.pathname}?playlist=${playlist.id}`;
+  } else {
+    el.playlistPublicLinkRow.hidden = true;
+  }
+
+  const { count: memberCount } = await sb
+    .from("playlist_members")
+    .select("*", { count: "exact", head: true })
+    .eq("playlist_id", playlist.id);
+  const total = (memberCount ?? 0) + 1; // +1 pour le propriétaire, qui ne figure pas dans playlist_members
+  el.playlistMembersList.textContent = `👥 ${total} contributeur${total > 1 ? "s" : ""} (propriétaire inclus)`;
+
+  const { data: items, error } = await sb
+    .from("playlist_items")
+    .select("*, items(*, categories(*))")
+    .eq("playlist_id", playlist.id)
+    .order("created_at", { ascending: false });
+  if (error) {
+    el.playlistDetailItems.innerHTML = `<p class='empty'>${escapeHtml(error.message)}</p>`;
+    return;
+  }
+  renderPlaylistItemsGrid(items ?? []);
+}
+
+function renderPlaylistItemsGrid(playlistItems) {
+  if (!playlistItems.length) {
+    el.playlistDetailItems.innerHTML = "<p class='empty'>Aucun item pour l'instant — utilise la recherche ci-dessus pour en ajouter.</p>";
+    return;
+  }
+  el.playlistDetailItems.innerHTML = "";
+  playlistItems.forEach((pi) => {
+    const item = pi.items;
+    const card = document.createElement("div");
+    card.className = "pokedex-card";
+    const canRemove = currentPlaylist?.isOwner || pi.added_by_user_id === currentUser?.id;
+    card.innerHTML = `
+      <img src="${item.cover_image_url ?? ""}" alt="" onerror="this.style.visibility='hidden'" />
+      <div class="pokedex-title">${item.categories?.icon ?? ""} ${escapeHtml(item.title)}</div>
+      ${canRemove ? `<button type="button" class="playlist-item-remove" aria-label="Retirer">×</button>` : ""}
+    `;
+    attachItemBubble(card, item, item.categories);
+    if (canRemove) {
+      card.querySelector(".playlist-item-remove").addEventListener("click", async (e) => {
+        e.stopPropagation();
+        const { error } = await sb.from("playlist_items").delete().eq("id", pi.id);
+        if (error) return alert(error.message);
+        renderPlaylistDetail();
+      });
+    }
+    el.playlistDetailItems.appendChild(card);
+  });
+}
+
+// recherche d'items du catalogue à ajouter à la liste ouverte (même approche que la recherche
+// globale de l'accueil : index plein texte + repli ilike sur le titre)
+el.playlistAddItemInput.addEventListener("input", () => {
+  clearTimeout(playlistAddItemDebounce);
+  const query = el.playlistAddItemInput.value.trim();
+  if (query.length < 2) {
+    el.playlistAddItemResults.hidden = true;
+    el.playlistAddItemResults.innerHTML = "";
+    return;
+  }
+  playlistAddItemDebounce = setTimeout(runPlaylistAddItemSearch, 350);
+});
+document.addEventListener("click", (e) => {
+  if (!el.playlistAddItemInput.parentElement.contains(e.target)) el.playlistAddItemResults.hidden = true;
+});
+
+async function runPlaylistAddItemSearch() {
+  const query = el.playlistAddItemInput.value.trim();
+  if (query.length < 2 || !currentPlaylist) return;
+  const token = ++playlistAddItemToken;
+  el.playlistAddItemResults.hidden = false;
+  el.playlistAddItemResults.innerHTML = "<p class='empty'>Recherche...</p>";
+  const [{ data: ftsResults }, { data: ilikeResults }] = await Promise.all([
+    sb.from("items").select("*, categories(*)").textSearch("search_vector", query, { type: "websearch", config: "french" }).limit(10),
+    sb.from("items").select("*, categories(*)").ilike("title", `%${query}%`).limit(10),
+  ]);
+  if (token !== playlistAddItemToken) return;
+  const merged = [...new Map([...(ftsResults ?? []), ...(ilikeResults ?? [])].map((i) => [i.id, i])).values()].slice(0, 10);
+  if (!merged.length) {
+    el.playlistAddItemResults.innerHTML = "<p class='empty'>Aucun résultat.</p>";
+    return;
+  }
+  el.playlistAddItemResults.innerHTML = "";
+  merged.forEach((item) => {
+    const row = document.createElement("div");
+    row.className = "search-result-row";
+    row.innerHTML = `
+      <img src="${item.cover_image_url ?? ""}" alt="" onerror="this.style.visibility='hidden'" />
+      <div class="info">
+        <span class="r-title">${escapeHtml(item.title)}</span>
+        <span class="r-meta">${item.categories?.icon ?? ""} ${escapeHtml(item.categories?.name ?? "")}</span>
+      </div>
+    `;
+    row.addEventListener("click", async () => {
+      el.playlistAddItemResults.hidden = true;
+      el.playlistAddItemInput.value = "";
+      const { error } = await sb
+        .from("playlist_items")
+        .insert({ playlist_id: currentPlaylist.row.id, item_id: item.id, added_by_user_id: currentUser.id });
+      if (error && error.code !== "23505") return alert(error.message); // 23505 = déjà dans la liste
+      renderPlaylistDetail();
+    });
+    el.playlistAddItemResults.appendChild(row);
+  });
+}
+
+el.playlistTogglePublicBtn.addEventListener("click", async () => {
+  if (!currentPlaylist?.isOwner) return;
+  const { error } = await sb
+    .from("playlists")
+    .update({ is_public: !currentPlaylist.row.is_public })
+    .eq("id", currentPlaylist.row.id);
+  if (error) return alert(error.message);
+  currentPlaylist.row.is_public = !currentPlaylist.row.is_public;
+  renderPlaylistDetail();
+});
+
+el.playlistDeleteBtn.addEventListener("click", async () => {
+  if (!currentPlaylist?.isOwner) return;
+  if (!confirm(`Supprimer définitivement la liste "${currentPlaylist.row.name}" ?`)) return;
+  const { error } = await sb.from("playlists").delete().eq("id", currentPlaylist.row.id);
+  if (error) return alert(error.message);
+  leavePlaylistChannel();
+  openPlaylistsListView();
+});
+
+el.playlistLeaveBtn.addEventListener("click", async () => {
+  if (!currentPlaylist || currentPlaylist.isOwner) return;
+  const { error } = await sb
+    .from("playlist_members")
+    .delete()
+    .eq("playlist_id", currentPlaylist.row.id)
+    .eq("user_id", currentUser.id);
+  if (error) return alert(error.message);
+  leavePlaylistChannel();
+  openPlaylistsListView();
+});
+
+el.playlistPublicLinkCopyBtn.addEventListener("click", () => shareOrCopy({ title: currentPlaylist?.row.name ?? "Glanure", url: el.playlistPublicLinkInput.value }, el.playlistPublicLinkCopyBtn));
+el.playlistInviteCodeCopyBtn.addEventListener("click", async () => {
+  try {
+    await navigator.clipboard.writeText(currentPlaylist?.row.invite_code ?? "");
+    const original = el.playlistInviteCodeCopyBtn.textContent;
+    el.playlistInviteCodeCopyBtn.textContent = "Copié !";
+    setTimeout(() => (el.playlistInviteCodeCopyBtn.textContent = original), 1500);
+  } catch (_e) {
+    prompt("Code d'invitation :", currentPlaylist?.row.invite_code ?? "");
+  }
+});
+
+// suivi en direct : dès qu'un contributeur ajoute/retire un item ou rejoint la liste, tous les
+// autres onglets ouverts sur cette même liste se rafraîchissent automatiquement
+function subscribePlaylistChannel(playlistId) {
+  leavePlaylistChannel();
+  playlistChannel = sb
+    .channel(`playlist-${playlistId}`)
+    .on("postgres_changes", { event: "*", schema: "public", table: "playlist_items", filter: `playlist_id=eq.${playlistId}` }, () => {
+      if (currentPlaylist?.row.id === playlistId) renderPlaylistDetail();
+    })
+    .on("postgres_changes", { event: "*", schema: "public", table: "playlist_members", filter: `playlist_id=eq.${playlistId}` }, () => {
+      if (currentPlaylist?.row.id === playlistId) renderPlaylistDetail();
+    })
+    .subscribe();
+}
+
+function leavePlaylistChannel() {
+  if (playlistChannel) {
+    sb.removeChannel(playlistChannel);
+    playlistChannel = null;
+  }
+  currentPlaylist = null;
+}
+
+// ---------- vue publique d'une liste partagée (?playlist=<id>), consultable sans connexion ----------
+async function renderPublicPlaylist(playlistId) {
+  document.querySelector("header").hidden = true;
+  document.querySelector("nav.main-nav").hidden = true;
+  ["home-view", "catalogue-view", "collection-view", "stats-view", "fun-view", "detail-view", "creator-view", "minigames-view", "playlists-view"]
+    .forEach((id) => {
+      const node = document.getElementById(id);
+      if (node) node.hidden = true;
+    });
+  el.playlistPublicView.hidden = false;
+
+  const { data: playlist, error } = await sb.from("public_playlists").select("*").eq("playlist_id", playlistId).maybeSingle();
+  if (error || !playlist) {
+    el.playlistPublicName.textContent = "Liste introuvable";
+    el.playlistPublicContent.innerHTML = "<p class='empty'>Cette liste n'existe pas ou n'est plus publique.</p>";
+    return;
+  }
+  el.playlistPublicName.textContent = `📃 ${playlist.name}`;
+  if (playlist.description) {
+    el.playlistPublicDescription.textContent = playlist.description;
+    el.playlistPublicDescription.hidden = false;
+  }
+
+  const { data: items } = await sb.from("public_playlist_items").select("*").eq("playlist_id", playlistId);
+  if (!items?.length) {
+    el.playlistPublicContent.innerHTML = "<p class='empty'>Cette liste est vide pour l'instant.</p>";
+    return;
+  }
+  const grid = document.createElement("div");
+  grid.className = "pokedex-grid";
+  items.forEach((item) => {
+    const card = document.createElement("div");
+    card.className = "pokedex-card";
+    card.innerHTML = `
+      <a href="?item=${item.item_id}" target="_blank" rel="noopener">
+        <img src="${item.cover_image_url ?? ""}" alt="" onerror="this.style.visibility='hidden'" />
+        <div class="pokedex-title">${item.category_icon ?? ""} ${escapeHtml(item.title)}</div>
+      </a>
+    `;
+    grid.appendChild(card);
+  });
+  el.playlistPublicContent.innerHTML = "";
+  el.playlistPublicContent.appendChild(grid);
 }
 
 // ---------- CGU / CGV ----------
@@ -7447,6 +7866,7 @@ const bootParams = new URLSearchParams(location.search);
 const showcaseUserId = bootParams.get("showcase");
 const showcaseUsername = bootParams.get("u");
 const sharedItemId = bootParams.get("item");
+const sharedPlaylistId = bootParams.get("playlist");
 const bootView = bootParams.get("view");
 const steamLinked = bootParams.get("steam_linked");
 const steamError = bootParams.get("steam_error");
@@ -7465,6 +7885,12 @@ if (showcaseUserId || showcaseUsername) {
   // être connecté (pour suivre le profil), mais pas de catalogue à charger sur cette page
   initAuth().then(() => {
     renderPublicShowcase({ userId: showcaseUserId, username: showcaseUsername });
+  });
+} else if (sharedPlaylistId) {
+  // lien de partage d'une liste personnalisée publique (?playlist=<id>) : consultable sans
+  // connexion, comme la vitrine de profil ci-dessus.
+  initAuth().then(() => {
+    renderPublicPlaylist(sharedPlaylistId);
   });
 } else {
   initAuth().then(() => {

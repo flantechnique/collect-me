@@ -1325,6 +1325,25 @@ form#add-item-form button[type="submit"]:hover { background: var(--accent-hover)
 
 .entry-photo-remove:hover { background: var(--accent-hover); }
 
+.playlist-card { cursor: pointer; }
+
+.playlist-item-remove {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff8f0;
+  border: none;
+  cursor: pointer;
+  font-size: 0.9rem;
+  line-height: 1;
+}
+
+.playlist-item-remove:hover { background: var(--accent-hover); }
+
 .entry-photos-input {
   font-size: 0.8rem;
   color: var(--muted);
