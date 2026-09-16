@@ -93,6 +93,11 @@ const el = {
   pixelguessJoinCode: document.getElementById("pixelguess-join-code"),
   pixelguessJoinBtn: document.getElementById("pixelguess-join-btn"),
   pixelguessArea: document.getElementById("pixelguess-area"),
+  guessOwnerMultiRankedBtn: document.getElementById("guessowner-multi-ranked-btn"),
+  guessOwnerMultiCasualBtn: document.getElementById("guessowner-multi-casual-btn"),
+  guessOwnerJoinCode: document.getElementById("guessowner-join-code"),
+  guessOwnerJoinBtn: document.getElementById("guessowner-join-btn"),
+  guessOwnerArea: document.getElementById("guessowner-area"),
   funView: document.getElementById("fun-view"),
   recommendationsContent: document.getElementById("recommendations-content"),
   compareInput: document.getElementById("compare-input"),
@@ -3486,15 +3491,19 @@ function loadMinigamesView() {
   renderLeaderboard();
   if (!quizSoloState && !currentGameRoom) el.quizplaylistArea.innerHTML = "";
   if (!pixelSoloState && !currentGameRoom) el.pixelguessArea.innerHTML = "";
+  if (!currentGameRoom) el.guessOwnerArea.innerHTML = "";
 }
 
 // aire d'affichage propre à chaque mini-jeu (salon multijoueur générique)
 function areaElFor(gameSlug) {
-  return gameSlug === "pixel_guess" ? el.pixelguessArea : el.quizplaylistArea;
+  if (gameSlug === "pixel_guess") return el.pixelguessArea;
+  if (gameSlug === "guess_owner") return el.guessOwnerArea;
+  return el.quizplaylistArea;
 }
 
-const ROOM_TOTAL_ROUNDS = { quiz_playlist: 10, pixel_guess: 5 };
-const ROOM_ANSWER_WINDOW_MS = { quiz_playlist: 20000, pixel_guess: 22000 };
+const ROOM_TOTAL_ROUNDS = { quiz_playlist: 10, pixel_guess: 5, guess_owner: 6 };
+const ROOM_ANSWER_WINDOW_MS = { quiz_playlist: 20000, pixel_guess: 22000, guess_owner: 15000 };
+const ROOM_MIN_POOL = { quiz_playlist: 4, pixel_guess: 4, guess_owner: 3 };
 
 // ---------- classement ----------
 let lbScope = "general";
@@ -3759,6 +3768,9 @@ el.quizplaylistJoinBtn.addEventListener("click", () => joinGameRoomByCode("quiz_
 el.pixelguessMultiRankedBtn.addEventListener("click", () => createGameRoom("ranked", "pixel_guess"));
 el.pixelguessMultiCasualBtn.addEventListener("click", () => createGameRoom("casual", "pixel_guess"));
 el.pixelguessJoinBtn.addEventListener("click", () => joinGameRoomByCode("pixel_guess"));
+el.guessOwnerMultiRankedBtn.addEventListener("click", () => createGameRoom("ranked", "guess_owner"));
+el.guessOwnerMultiCasualBtn.addEventListener("click", () => createGameRoom("casual", "guess_owner"));
+el.guessOwnerJoinBtn.addEventListener("click", () => joinGameRoomByCode("guess_owner"));
 
 function randomRoomCode() {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // évite 0/O et 1/I, ambigus à l'oral/à l'écrit
@@ -3766,7 +3778,9 @@ function randomRoomCode() {
 }
 
 function joinCodeInputFor(gameSlug) {
-  return gameSlug === "pixel_guess" ? el.pixelguessJoinCode : el.quizplaylistJoinCode;
+  if (gameSlug === "pixel_guess") return el.pixelguessJoinCode;
+  if (gameSlug === "guess_owner") return el.guessOwnerJoinCode;
+  return el.quizplaylistJoinCode;
 }
 
 async function createGameRoom(mode, gameSlug) {
@@ -3941,15 +3955,29 @@ async function startGameRoom() {
   if (room.game_slug === "pixel_guess") {
     const withImage = (data ?? []).filter((e) => e.items.cover_image_url);
     pool = [...new Map(withImage.map((e) => [e.item_id, e.items])).values()];
+  } else if (room.game_slug === "guess_owner") {
+    // pas de déduplication par item_id ici : contrairement aux autres jeux, l'identité du
+    // PROPRIÉTAIRE fait partie de la question, donc chaque ligne de possession compte à part
+    // (même objet possédé par 2 joueurs = 2 questions valides distinctes, potentiellement
+    // ambiguës si les deux se présentent, mais c'est un cas rare accepté pour une app perso)
+    pool = (data ?? []).map((e) => ({
+      ownerUserId: e.user_id,
+      title: e.items.title,
+      imageUrl: e.items.cover_image_url,
+    }));
   } else {
     const owned = (data ?? []).filter((e) => DISCOGS_CATEGORIES.includes(e.items.categories.slug));
     pool = [...new Map(owned.map((e) => [e.item_id, e.items])).values()];
   }
-  if (pool.length < 4) {
+  const minPool = ROOM_MIN_POOL[room.game_slug] ?? 4;
+  if (pool.length < minPool) {
+    const messages = {
+      pixel_guess: `Pas assez d'objets possédés avec une image au total dans le salon pour lancer une partie (${minPool} minimum, tous joueurs confondus).`,
+      guess_owner: `Pas assez d'objets possédés au total dans le salon pour lancer une partie (${minPool} minimum, tous joueurs confondus).`,
+    };
     alert(
-      room.game_slug === "pixel_guess"
-        ? "Pas assez d'objets possédés avec une image au total dans le salon pour lancer une partie (4 minimum, tous joueurs confondus)."
-        : "Pas assez de vinyles/CD possédés au total dans le salon pour lancer une partie (4 minimum, tous joueurs confondus)."
+      messages[room.game_slug] ??
+        `Pas assez de vinyles/CD possédés au total dans le salon pour lancer une partie (${minPool} minimum, tous joueurs confondus).`
     );
     return;
   }
@@ -3969,6 +3997,8 @@ async function advanceGameRoomRound(roundNumber) {
   const question =
     room.game_slug === "pixel_guess"
       ? buildPixelGuessQuestion(combinedPool)
+      : room.game_slug === "guess_owner"
+      ? buildGuessOwnerQuestion(combinedPool, currentGameRoom.players)
       : await buildQuizPlaylistQuestion(combinedPool);
   if (!question) {
     await sb.from("game_rooms").update({ status: "finished", current_question: null }).eq("id", room.id);
@@ -4013,7 +4043,9 @@ function renderGameRoom() {
   }
 
   if (room.status === "playing") {
-    return room.game_slug === "pixel_guess" ? renderPixelGuessRoomRound() : renderQuizRoomRound();
+    if (room.game_slug === "pixel_guess") return renderPixelGuessRoomRound();
+    if (room.game_slug === "guess_owner") return renderGuessOwnerRound();
+    return renderQuizRoomRound();
   }
   if (room.status === "finished") return renderGameRoomResults();
 }
@@ -4162,8 +4194,26 @@ async function handleRoomAnswerInsert(answerRow) {
     .eq("round_number", currentGameRoom.room.current_round)
     .order("answered_at", { ascending: true });
 
+  const gameSlug = currentGameRoom.room.game_slug;
   const firstCorrect = (roundAnswers ?? []).find((a) => a.is_correct);
-  if (firstCorrect && firstCorrect.user_id === currentUser.id && !currentGameRoom.pointAwardedThisRound) {
+
+  if (gameSlug === "guess_owner") {
+    // Vote : pas de "premier arrivé" — TOUS les joueurs qui ont voté juste marquent un point,
+    // chacun s'auto-attribue le sien dès que sa propre réponse arrive (comme les autres jeux,
+    // chaque client ne peut mettre à jour que sa propre ligne game_room_players, RLS oblige).
+    const myAnswer = (roundAnswers ?? []).find((a) => a.user_id === currentUser.id);
+    if (myAnswer?.is_correct && !currentGameRoom.pointAwardedThisRound) {
+      currentGameRoom.pointAwardedThisRound = true;
+      const me = currentGameRoom.players.find((p) => p.user_id === currentUser.id);
+      if (me) {
+        await sb
+          .from("game_room_players")
+          .update({ score: me.score + 1 })
+          .eq("room_id", currentGameRoom.room.id)
+          .eq("user_id", currentUser.id);
+      }
+    }
+  } else if (firstCorrect && firstCorrect.user_id === currentUser.id && !currentGameRoom.pointAwardedThisRound) {
     currentGameRoom.pointAwardedThisRound = true;
     const me = currentGameRoom.players.find((p) => p.user_id === currentUser.id);
     if (me) {
@@ -4176,14 +4226,23 @@ async function handleRoomAnswerInsert(answerRow) {
   }
 
   if (currentGameRoom.isHost && !currentGameRoom.advancingRound) {
-    let shouldAdvance = !!firstCorrect;
-    // "tout le monde a répondu" ne s'applique qu'au QCM (une ligne = une réponse par joueur).
-    // En réponse libre (Pixel Guess), un joueur peut soumettre plusieurs hypothèses fausses
-    // sans pour autant avoir fini sa manche : on ne se base alors que sur la bonne réponse ou
-    // sur le filet de sécurité par délai (voir subscribeGameRoomChannel).
-    if (!shouldAdvance && currentGameRoom.room.game_slug !== "pixel_guess") {
+    let shouldAdvance;
+    if (gameSlug === "guess_owner") {
+      // le propriétaire de l'objet ne vote pas (ce serait un point gratuit) : on attend que
+      // tous les AUTRES joueurs aient voté, pas lui.
+      const ownerUserId = currentGameRoom.room.current_question?.ownerUserId;
+      const expectedVoters = currentGameRoom.players.filter((p) => p.user_id !== ownerUserId).length;
       const answeredUserIds = new Set((roundAnswers ?? []).map((a) => a.user_id));
-      shouldAdvance = answeredUserIds.size >= currentGameRoom.players.length;
+      shouldAdvance = answeredUserIds.size >= expectedVoters;
+    } else if (gameSlug === "pixel_guess") {
+      // "tout le monde a répondu" ne s'applique pas à la réponse libre (Pixel Guess) : un
+      // joueur peut soumettre plusieurs hypothèses fausses sans avoir fini sa manche — on ne
+      // se base alors que sur la bonne réponse ou sur le filet de sécurité par délai (voir
+      // subscribeGameRoomChannel).
+      shouldAdvance = !!firstCorrect;
+    } else {
+      const answeredUserIds = new Set((roundAnswers ?? []).map((a) => a.user_id));
+      shouldAdvance = !!firstCorrect || answeredUserIds.size >= currentGameRoom.players.length;
     }
     if (shouldAdvance) {
       currentGameRoom.advancingRound = true;
@@ -4411,6 +4470,72 @@ async function finishPixelGuessSolo() {
   document.getElementById("pixelguess-replay-btn").onclick = startPixelGuessSolo;
   pixelSoloState = null;
   renderLeaderboard();
+}
+
+// =====================================================================
+// ---------- Mini-jeux : "C'est à qui ça ?" (multijoueur uniquement) ----------
+// =====================================================================
+//
+// Pas de mode solo ici : la question porte sur l'identité du propriétaire, donc il faut
+// forcément plusieurs collections en présence pour que ça ait un sens. Réutilise le salon
+// générique (createGameRoom/joinGameRoomByCode/etc.) comme Quizz Playlist et Pixel Guess.
+//
+// Différence de mécanique par rapport aux deux autres jeux : ce n'est pas une course au
+// "premier arrivé" mais un vote — chaque joueur (sauf le propriétaire de l'objet, qui ne
+// vote pas) choisit un nom parmi les participants, et TOUS ceux qui ont voté juste marquent
+// un point (voir la branche dédiée dans handleRoomAnswerInsert).
+
+function buildGuessOwnerQuestion(pool, players) {
+  if (pool.length < 1 || players.length < 2) return null;
+  const target = pool[Math.floor(Math.random() * pool.length)];
+  return {
+    itemTitle: target.title,
+    itemImageUrl: target.imageUrl,
+    ownerUserId: target.ownerUserId,
+    candidates: players.map((p) => ({ userId: p.user_id, displayName: p.display_name || "Joueur" })),
+  };
+}
+
+function renderGuessOwnerRound() {
+  const { room, players, areaEl } = currentGameRoom;
+  const question = room.current_question;
+  const myAnswered = currentGameRoom.myAnswerRound === room.current_round;
+  const isOwner = question?.ownerUserId === currentUser.id;
+
+  const wrapper = document.createElement("div");
+  wrapper.className = "quiz-round";
+  const scoreboard = [...players]
+    .sort((a, b) => b.score - a.score)
+    .map((p) => `<li>${escapeHtml(p.display_name || "Joueur")} — ${p.score} pt${p.score > 1 ? "s" : ""}</li>`)
+    .join("");
+  wrapper.innerHTML = `
+    <p class="quiz-round-counter">Manche ${room.current_round}/${room.total_rounds} ${room.mode === "ranked" ? "🏆" : "🎈"}</p>
+    <ul class="room-scoreboard">${scoreboard}</ul>
+    ${question?.itemImageUrl ? `<img class="guessowner-item-image" src="${question.itemImageUrl}" alt="" onerror="this.style.visibility='hidden'" />` : ""}
+    <p>🕵️ À qui appartient « ${question ? escapeHtml(question.itemTitle) : "..."} » ?</p>
+    <div class="quiz-options"></div>
+    <p class="room-answer-status empty"></p>
+  `;
+  const optionsWrap = wrapper.querySelector(".quiz-options");
+  const statusEl = wrapper.querySelector(".room-answer-status");
+
+  if (isOwner) {
+    statusEl.textContent = "C'est ton objet ! Patiente pendant que les autres devinent...";
+  } else if (myAnswered) {
+    statusEl.textContent = "Vote envoyé, en attente des autres joueurs...";
+  } else if (question) {
+    question.candidates.forEach((c) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "quiz-option-btn";
+      btn.textContent = c.displayName;
+      btn.onclick = () => submitRoomAnswer(c.userId, c.userId === question.ownerUserId);
+      optionsWrap.appendChild(btn);
+    });
+  }
+
+  areaEl.innerHTML = "";
+  areaEl.appendChild(wrapper);
 }
 
 // ---------- helpers ----------

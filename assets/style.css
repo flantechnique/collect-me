@@ -1694,6 +1694,20 @@ form#add-item-form button[type="submit"]:hover { background: var(--accent-hover)
 .pixelguess-feedback.correct { color: #3f6b3a; }
 .pixelguess-feedback.incorrect { color: #a2412f; }
 
+/* ---------- mini-jeux : C'est à qui ça ? ---------- */
+.guessowner-item-image {
+  display: block;
+  margin: 0 auto 0.9rem;
+  max-width: 220px;
+  max-height: 220px;
+  width: auto;
+  height: auto;
+  border-radius: 12px;
+  border: 1.5px solid var(--border);
+  object-fit: cover;
+  background: var(--bg-soft);
+}
+
 /* ---------- vitrine publique ---------- */
 .showcase-header {
   display: flex;
