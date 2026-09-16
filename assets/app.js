@@ -158,6 +158,18 @@ const el = {
   gameFullscreenClose: document.getElementById("game-fullscreen-close"),
   gameFullscreenBody: document.getElementById("game-fullscreen-body"),
   funView: document.getElementById("fun-view"),
+  advSearchCategory: document.getElementById("adv-search-category"),
+  advSearchText: document.getElementById("adv-search-text"),
+  advSearchYearMin: document.getElementById("adv-search-year-min"),
+  advSearchYearMax: document.getElementById("adv-search-year-max"),
+  advSearchGenre: document.getElementById("adv-search-genre"),
+  advSearchValueMin: document.getElementById("adv-search-value-min"),
+  advSearchValueMax: document.getElementById("adv-search-value-max"),
+  advSearchBtn: document.getElementById("adv-search-btn"),
+  advSearchResults: document.getElementById("adv-search-results"),
+  exchangeSection: document.getElementById("exchange-section"),
+  exchangeSellContent: document.getElementById("exchange-sell-content"),
+  exchangeBuyContent: document.getElementById("exchange-buy-content"),
   recommendationsContent: document.getElementById("recommendations-content"),
   compareInput: document.getElementById("compare-input"),
   compareBtn: document.getElementById("compare-btn"),
@@ -1062,6 +1074,229 @@ function renderCategoryGrid() {
     group.appendChild(grid);
     el.discoverCategories.appendChild(group);
   });
+
+  populateAdvSearchCategory();
+}
+
+// ---------- Découvrir : recherche avancée croisée (Phase 18) ----------
+// Filtre le catalogue (toutes catégories ou une seule) par titre, année, genre/thème et valeur
+// estimée combinés. Les champs année/genre n'existent pas sous le même nom d'un schéma de
+// catégorie à l'autre (pressing_year/release_year/year, genre/theme...), donc le filtrage
+// combiné se fait côté client après une recherche serveur large plutôt que via des filtres
+// Postgrest par catégorie (qui demanderaient une requête différente par catégorie).
+const ADVANCED_SEARCH_GENRE_ATTRIBUTE = {
+  vinyl: "genre",
+  cd: "genre",
+  video_game: "genre",
+  dvd: "genre",
+  movie_poster: "genre",
+  stamp: "theme",
+};
+
+function populateAdvSearchCategory() {
+  if (!el.advSearchCategory) return;
+  const current = el.advSearchCategory.value;
+  el.advSearchCategory.innerHTML = '<option value="">Toutes les catégories</option>';
+  categories.forEach((cat) => {
+    const opt = document.createElement("option");
+    opt.value = cat.slug;
+    opt.textContent = `${cat.icon ?? ""} ${cat.name}`.trim();
+    el.advSearchCategory.appendChild(opt);
+  });
+  el.advSearchCategory.value = current;
+}
+
+// Année d'un item pour la recherche avancée : plus permissif que YEAR_ATTRIBUTE_BY_CATEGORY
+// (utilisé ailleurs pour la frise/les badges) — inclut aussi stamp/coin, qui ont bien un champ
+// "year" dans leur schéma d'attributs même si ce n'est pas une "année de sortie" au même sens.
+function advancedSearchYear(item) {
+  const key = YEAR_ATTRIBUTE_BY_CATEGORY[item.categories?.slug];
+  const raw = (key ? item.attributes?.[key] : null) ?? item.attributes?.year;
+  const year = raw ? parseInt(raw, 10) : null;
+  return Number.isFinite(year) ? year : null;
+}
+
+async function runAdvancedDiscoverSearch() {
+  el.advSearchResults.innerHTML = "<p class='empty'>Recherche...</p>";
+
+  const catSlug = el.advSearchCategory.value;
+  const text = el.advSearchText.value.trim();
+  const yearMin = el.advSearchYearMin.value ? parseInt(el.advSearchYearMin.value, 10) : null;
+  const yearMax = el.advSearchYearMax.value ? parseInt(el.advSearchYearMax.value, 10) : null;
+  const genre = el.advSearchGenre.value.trim().toLowerCase();
+  const valueMin = el.advSearchValueMin.value ? parseFloat(el.advSearchValueMin.value) : null;
+  const valueMax = el.advSearchValueMax.value ? parseFloat(el.advSearchValueMax.value) : null;
+
+  let query = sb.from("items").select("*, categories(*)").limit(300);
+  if (catSlug) {
+    const cat = categories.find((c) => c.slug === catSlug);
+    if (cat) query = query.eq("category_id", cat.id);
+  }
+  if (text.length >= 2) query = query.ilike("title", `%${text}%`);
+
+  const { data, error } = await query;
+  if (error) {
+    el.advSearchResults.innerHTML = "<p class='empty'>Erreur de recherche, réessaie.</p>";
+    return;
+  }
+
+  let results = data ?? [];
+  if (yearMin != null || yearMax != null) {
+    results = results.filter((item) => {
+      const y = advancedSearchYear(item);
+      if (y == null) return false;
+      if (yearMin != null && y < yearMin) return false;
+      if (yearMax != null && y > yearMax) return false;
+      return true;
+    });
+  }
+  if (genre) {
+    results = results.filter((item) => {
+      const key = ADVANCED_SEARCH_GENRE_ATTRIBUTE[item.categories?.slug];
+      const val = key ? item.attributes?.[key] : null;
+      return val && String(val).toLowerCase().includes(genre);
+    });
+  }
+  if (valueMin != null || valueMax != null) {
+    await fetchItemPriceStats(results.map((item) => item.id));
+    results = results.filter((item) => {
+      const resolved = resolvedItemValue(item);
+      if (!resolved || resolved.currency !== "EUR") return false;
+      if (valueMin != null && resolved.amount < valueMin) return false;
+      if (valueMax != null && resolved.amount > valueMax) return false;
+      return true;
+    });
+  }
+
+  if (!results.length) {
+    el.advSearchResults.innerHTML = "<p class='empty'>Aucun résultat pour ces critères.</p>";
+    return;
+  }
+
+  el.advSearchResults.innerHTML = "";
+  results.slice(0, 60).forEach((item) => {
+    el.advSearchResults.appendChild(renderItemCard(item, item.categories));
+  });
+  if (results.length > 60) {
+    const note = document.createElement("p");
+    note.className = "empty";
+    note.textContent = `${results.length} résultats trouvés, les 60 premiers sont affichés — affine ta recherche pour voir la suite.`;
+    el.advSearchResults.appendChild(note);
+  }
+}
+
+el.advSearchBtn?.addEventListener("click", runAdvancedDiscoverSearch);
+[el.advSearchText, el.advSearchYearMin, el.advSearchYearMax, el.advSearchGenre, el.advSearchValueMin, el.advSearchValueMax].forEach((input) => {
+  input?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") runAdvancedDiscoverSearch();
+  });
+});
+
+// ---------- Découvrir : échanges entre collectionneurs (Phase 18) ----------
+// Croise mes doublons "à vendre" avec les wantlists visibles (idées cadeaux) des personnes que
+// je suis, et inversement leurs objets "à vendre" avec ma propre wantlist — dans les deux sens,
+// scopé aux comptes suivis (comme les autres surfaces "entre amis" déjà en place : classement,
+// onglet "Mes amis" de l'accueil).
+async function renderCollectorExchanges() {
+  if (!el.exchangeSellContent) return;
+  if (!currentUser) {
+    el.exchangeSellContent.innerHTML = "<p class='empty'>Connecte-toi pour voir les échanges possibles avec tes amis.</p>";
+    el.exchangeBuyContent.innerHTML = "";
+    return;
+  }
+  el.exchangeSellContent.innerHTML = "<p class='empty'>Chargement...</p>";
+  el.exchangeBuyContent.innerHTML = "<p class='empty'>Chargement...</p>";
+
+  const { data: follows } = await sb.from("user_follows").select("followed_id").eq("follower_id", currentUser.id);
+  const followedIds = (follows ?? []).map((f) => f.followed_id);
+  if (!followedIds.length) {
+    const msg = "<p class='empty'>Suis d'autres collectionneurs depuis leur vitrine publique pour voir les échanges possibles ici.</p>";
+    el.exchangeSellContent.innerHTML = msg;
+    el.exchangeBuyContent.innerHTML = "";
+    return;
+  }
+
+  const entries = await fetchCollectionEntries();
+  const myForSale = entries.filter((e) => e.status === "for_sale");
+  const myWantedIds = new Set(entries.filter((e) => e.status === "wanted").map((e) => e.item_id));
+
+  const [{ data: friendsWishlist }, { data: friendsForSale }] = await Promise.all([
+    sb.from("public_wishlist_items").select("*").in("owner_user_id", followedIds),
+    sb.from("public_for_sale_items").select("*").in("user_id", followedIds),
+  ]);
+
+  const wantersByItem = new Map();
+  (friendsWishlist ?? []).forEach((w) => {
+    if (!wantersByItem.has(w.item_id)) wantersByItem.set(w.item_id, []);
+    wantersByItem.get(w.item_id).push(w);
+  });
+  const sellMatches = [];
+  const seenSell = new Set();
+  myForSale.forEach((e) => {
+    const wanters = wantersByItem.get(e.item_id);
+    if (!wanters || seenSell.has(e.item_id)) return;
+    seenSell.add(e.item_id);
+    const names = wanters
+      .map((w) => (w.owner_username ? `@${w.owner_username}` : w.owner_display_name || "un ami"))
+      .join(", ");
+    sellMatches.push({
+      item_id: e.item_id,
+      title: e.items?.title,
+      cover_image_url: e.items?.cover_image_url,
+      category_icon: e.items?.categories?.icon,
+      subtitle: `recherché par ${escapeHtml(names)}`,
+    });
+  });
+
+  const buyMatches = [];
+  const seenBuy = new Set();
+  (friendsForSale ?? []).forEach((f) => {
+    if (!myWantedIds.has(f.item_id) || seenBuy.has(f.item_id)) return;
+    seenBuy.add(f.item_id);
+    const seller = f.seller_username ? `@${f.seller_username}` : f.seller_display_name || "un ami";
+    const price = f.asking_price != null ? ` — ${Number(f.asking_price).toFixed(2)} €` : "";
+    buyMatches.push({
+      item_id: f.item_id,
+      title: f.title,
+      cover_image_url: f.cover_image_url,
+      category_icon: f.category_icon,
+      subtitle: `vendu par ${escapeHtml(seller)}${price}`,
+    });
+  });
+
+  renderExchangeGrid(
+    el.exchangeSellContent,
+    sellMatches,
+    "Aucun de tes doublons en vente n'intéresse tes amis pour l'instant (ou personne n'a de wantlist visible en idées cadeaux)."
+  );
+  renderExchangeGrid(
+    el.exchangeBuyContent,
+    buyMatches,
+    "Aucun de tes amis ne vend actuellement un objet que tu recherches."
+  );
+}
+
+function renderExchangeGrid(container, items, emptyMessage) {
+  if (!items.length) {
+    container.innerHTML = `<p class='empty'>${emptyMessage}</p>`;
+    return;
+  }
+  container.innerHTML = "";
+  const grid = document.createElement("div");
+  grid.className = "pokedex-grid";
+  items.forEach(({ item_id, title, cover_image_url, category_icon, subtitle }) => {
+    const card = document.createElement("button");
+    card.type = "button";
+    card.className = "pokedex-card owned";
+    card.innerHTML = `
+      <img src="${cover_image_url ?? ""}" alt="" onerror="this.style.visibility='hidden'" />
+      <div class="pokedex-title">${category_icon ?? ""} ${escapeHtml(title ?? "")}</div>
+      <p class="empty recommendation-reason">${subtitle}</p>
+    `;
+    card.onclick = () => openSharedItem(item_id);
+    grid.appendChild(card);
+  });
+  container.appendChild(grid);
 }
 
 // ---------- accueil : "Mes derniers ajouts" (refonte accueil, Phase 11 — renommé et rendu
@@ -4092,6 +4327,7 @@ async function loadFunView() {
     el.badgesContent.innerHTML = "";
     el.rouletteResult.innerHTML = "";
     el.quizQuestion.innerHTML = "";
+    renderCollectorExchanges();
     return;
   }
   const entries = await fetchCollectionEntries();
@@ -4099,6 +4335,7 @@ async function loadFunView() {
   renderOnThisDay(entries);
   renderRecommendations(entries);
   renderBadges(entries);
+  renderCollectorExchanges();
   el.rouletteResult.innerHTML = "";
   el.quizQuestion.innerHTML = "";
 }

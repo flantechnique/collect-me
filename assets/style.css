@@ -2911,6 +2911,29 @@ body.game-fullscreen-lock { overflow: hidden; }
   flex-wrap: wrap;
 }
 
+/* ---------- Découvrir : recherche avancée + échanges (Phase 18) ---------- */
+.advanced-search-filters {
+  display: flex;
+  gap: 0.6rem;
+  margin: 0.6rem 0 0.9rem;
+  flex-wrap: wrap;
+}
+
+.advanced-search-filters select,
+.advanced-search-filters input {
+  flex: 1 1 140px;
+  min-width: 110px;
+}
+
+.advanced-search-filters button {
+  flex: 0 0 auto;
+}
+
+#exchange-section h4 {
+  margin: 1rem 0 0.5rem;
+  font-size: 0.95rem;
+}
+
 .duel-summary { margin-bottom: 0.9rem; }
 
 .duel-total { font-weight: 700; margin: 0 0 0.7rem; }
