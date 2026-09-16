@@ -220,6 +220,31 @@
         <div id="discover-categories"></div>
       </div>
 
+      <div class="stats-section">
+        <h3>🔎 Recherche avancée</h3>
+        <p class="empty">Combine plusieurs critères pour explorer le catalogue : catégorie, titre, année, genre/thème et valeur estimée.</p>
+        <div class="advanced-search-filters">
+          <select id="adv-search-category"><option value="">Toutes les catégories</option></select>
+          <input id="adv-search-text" type="text" placeholder="Titre..." autocomplete="off" />
+          <input id="adv-search-year-min" type="number" placeholder="Année min" />
+          <input id="adv-search-year-max" type="number" placeholder="Année max" />
+          <input id="adv-search-genre" type="text" placeholder="Genre / thème..." autocomplete="off" />
+          <input id="adv-search-value-min" type="number" placeholder="Valeur min (€)" min="0" step="0.01" />
+          <input id="adv-search-value-max" type="number" placeholder="Valeur max (€)" min="0" step="0.01" />
+          <button id="adv-search-btn" type="button">Rechercher</button>
+        </div>
+        <div id="adv-search-results"></div>
+      </div>
+
+      <div id="exchange-section" class="stats-section">
+        <h3>🔄 Échanges entre collectionneurs</h3>
+        <p class="empty">Basé sur les personnes que tu suis, leurs objets en vente/wantlist visibles publiquement.</p>
+        <h4>🎁 Tes doublons qui intéressent tes amis</h4>
+        <div id="exchange-sell-content"></div>
+        <h4>🛒 Ce que tes amis vendent et que tu recherches</h4>
+        <div id="exchange-buy-content"></div>
+      </div>
+
       <div id="on-this-day-section" class="stats-section" hidden>
         <h3>📅 Ce jour-là</h3>
         <div id="on-this-day-content"></div>
