@@ -193,6 +193,12 @@
       </div>
 
       <div class="stats-section">
+        <h3>📉 Valeur de marché dans le temps</h3>
+        <p class="empty">Différent du graphique ci-dessus (basé sur tes acquisitions passées) : celui-ci suit la valeur totale actuelle de ta collection au fil du temps, avec un relevé enregistré à chaque visite de cette page. Impossible de reconstituer le passé : le suivi démarre à partir d'aujourd'hui.</p>
+        <div id="market-value-history-content"></div>
+      </div>
+
+      <div class="stats-section">
         <h3>📊 Mon année en collection</h3>
         <button id="wrapped-generate-btn" type="button">Générer mon récap</button>
         <div id="wrapped-content"></div>
@@ -530,6 +536,11 @@
         <h3>🎁 Idées cadeaux</h3>
         <p id="showcase-wishlist-own-note" class="empty" hidden>Visible publiquement — tu ne peux pas voir si un item a été réservé, pour préserver la surprise.</p>
         <div id="showcase-wishlist-content"></div>
+      </div>
+
+      <div id="showcase-badges-section" class="stats-section" hidden>
+        <h3>🏆 Badges</h3>
+        <div id="showcase-badges-content" class="badges-grid"></div>
       </div>
 
       <div id="showcase-activity-section" class="stats-section" hidden>
