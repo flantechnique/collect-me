@@ -3504,6 +3504,11 @@ function areaElFor(gameSlug) {
 const ROOM_TOTAL_ROUNDS = { quiz_playlist: 10, pixel_guess: 5, guess_owner: 6 };
 const ROOM_ANSWER_WINDOW_MS = { quiz_playlist: 20000, pixel_guess: 22000, guess_owner: 15000 };
 const ROOM_MIN_POOL = { quiz_playlist: 4, pixel_guess: 4, guess_owner: 3 };
+const GAME_LABELS = {
+  quiz_playlist: "🎧 Quizz Playlist",
+  pixel_guess: "🖼️ Pixel Guess",
+  guess_owner: "🕵️ C'est à qui ça ?",
+};
 
 // ---------- classement ----------
 let lbScope = "general";
@@ -3869,10 +3874,25 @@ function subscribeGameRoomChannel(roomId) {
       { event: "UPDATE", schema: "public", table: "game_rooms", filter: `id=eq.${roomId}` },
       (payload) => {
         if (!currentGameRoom) return;
+        // salon persistant : l'hôte peut relancer une PARTIE DIFFÉRENTE dans le même salon
+        // (même code, mêmes joueurs) une fois la précédente terminée — détecté ici via le
+        // compteur game_generation, incrémenté à chaque nouvelle partie lancée dans ce salon.
+        const isNewGame = payload.new.game_generation !== currentGameRoom.room.game_generation;
         currentGameRoom.room = payload.new;
         currentGameRoom.pointAwardedThisRound = false;
         currentGameRoom.advancingRound = false;
         clearRoundTimeout();
+        if (isNewGame) {
+          // le nouveau jeu a sa propre carte/zone d'affichage dans l'onglet Mini-jeux — on
+          // bascule l'affichage dessus et on vide l'ancienne pour ne pas la laisser figée.
+          const oldAreaEl = currentGameRoom.areaEl;
+          currentGameRoom.areaEl = areaElFor(payload.new.game_slug);
+          if (oldAreaEl && oldAreaEl !== currentGameRoom.areaEl) oldAreaEl.innerHTML = "";
+          currentGameRoom.myAnswerRound = null; // sinon l'ancien numéro de manche peut coïncider avec le nouveau
+          currentGameRoom.combinedPool = null;
+          currentGameRoom.scoreRecorded = false; // permet d'enregistrer le score classé de CETTE nouvelle partie
+          resetMyRoomScore();
+        }
         // filet de sécurité : si l'hôte, on force le passage à la manche suivante quand le
         // délai est écoulé (utile si un joueur ne répond jamais — sinon la manche resterait
         // bloquée indéfiniment, faute d'un "tout le monde a répondu" jamais atteint).
@@ -3936,6 +3956,36 @@ async function leaveGameRoomForGood() {
   if (wasHost) await sb.from("game_rooms").update({ status: "finished" }).eq("id", roomId);
   leaveGameRoomChannel();
   if (areaEl) areaEl.innerHTML = "";
+}
+
+async function resetMyRoomScore() {
+  if (!currentGameRoom || !currentUser) return;
+  await sb
+    .from("game_room_players")
+    .update({ score: 0 })
+    .eq("room_id", currentGameRoom.room.id)
+    .eq("user_id", currentUser.id);
+}
+
+// Salon persistant : au lieu de clore le salon, l'hôte relance une AUTRE partie (même jeu ou
+// différent) sans faire repartir tout le monde — mêmes joueurs, même code. Chaque client
+// détecte le changement via game_generation (voir subscribeGameRoomChannel) et remet son
+// propre score à 0 (RLS : impossible de modifier le score des autres joueurs).
+async function startNewGameInRoom(newGameSlug) {
+  if (!currentGameRoom?.isHost) return;
+  const room = currentGameRoom.room;
+  await sb
+    .from("game_rooms")
+    .update({
+      game_slug: newGameSlug,
+      status: "waiting",
+      current_round: 0,
+      current_question: null,
+      round_deadline: null,
+      total_rounds: ROOM_TOTAL_ROUNDS[newGameSlug] ?? 10,
+      game_generation: (room.game_generation ?? 1) + 1,
+    })
+    .eq("id", room.id);
 }
 
 async function startGameRoom() {
@@ -4026,7 +4076,7 @@ function renderGameRoom() {
     const wrapper = document.createElement("div");
     wrapper.className = "game-room-lobby";
     wrapper.innerHTML = `
-      <p class="empty">${room.mode === "ranked" ? "🏆 Salon classé" : "🎈 Salon amical (non classé)"} — code à partager : <strong class="room-code">${room.code}</strong></p>
+      <p class="empty">${GAME_LABELS[room.game_slug] ?? "Mini-jeu"} — ${room.mode === "ranked" ? "🏆 salon classé" : "🎈 salon amical (non classé)"} — code à partager : <strong class="room-code">${room.code}</strong></p>
       <ul class="room-players-list">${players.map((p) => `<li>${escapeHtml(p.display_name || "Joueur")}</li>`).join("")}</ul>
       ${
         isHost
@@ -4258,10 +4308,11 @@ async function recordMyRoomScoreIfNeeded() {
   currentGameRoom.scoreRecorded = true;
   if (currentGameRoom.room.mode !== "ranked") return;
   const me = currentGameRoom.players.find((p) => p.user_id === currentUser.id);
-  if (me && me.score > 0) await recordGameScore("quiz_playlist", me.score);
+  if (me && me.score > 0) await recordGameScore(currentGameRoom.room.game_slug, me.score);
 }
 
 function renderGameRoomResults() {
+  const { isHost, areaEl } = currentGameRoom;
   const players = [...currentGameRoom.players].sort((a, b) => b.score - a.score);
   const wrapper = document.createElement("div");
   wrapper.className = "quiz-result";
@@ -4270,10 +4321,27 @@ function renderGameRoomResults() {
     <ol class="room-final-scores">
       ${players.map((p) => `<li>${escapeHtml(p.display_name || "Joueur")} — ${p.score} pt${p.score > 1 ? "s" : ""}</li>`).join("")}
     </ol>
-    <button type="button" id="room-final-leave-btn">Retour</button>
+    ${
+      isHost
+        ? `<div class="room-newgame-picker">
+            <p class="empty">🔁 Continuer dans ce salon avec un autre mini-jeu (mêmes joueurs, même code) :</p>
+            <div class="minigame-actions">
+              ${Object.entries(GAME_LABELS)
+                .map(([slug, label]) => `<button type="button" class="room-newgame-btn" data-slug="${slug}">${label}</button>`)
+                .join("")}
+            </div>
+          </div>`
+        : "<p class='empty'>🔁 En attente que l'hôte relance une partie dans ce salon, ou quitte...</p>"
+    }
+    <button type="button" id="room-final-leave-btn">Quitter le salon</button>
   `;
-  currentGameRoom.areaEl.innerHTML = "";
-  currentGameRoom.areaEl.appendChild(wrapper);
+  areaEl.innerHTML = "";
+  areaEl.appendChild(wrapper);
+  if (isHost) {
+    wrapper.querySelectorAll(".room-newgame-btn").forEach((btn) => {
+      btn.onclick = () => startNewGameInRoom(btn.dataset.slug);
+    });
+  }
   document.getElementById("room-final-leave-btn").onclick = () => {
     leaveGameRoomForGood();
     renderLeaderboard();

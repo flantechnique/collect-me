@@ -1586,6 +1586,14 @@ form#add-item-form button[type="submit"]:hover { background: var(--accent-hover)
 
 .game-room-lobby { text-align: center; }
 
+.room-newgame-picker {
+  margin: 1rem 0;
+  padding-top: 0.8rem;
+  border-top: 1px dashed var(--border);
+  text-align: center;
+}
+.room-newgame-picker .minigame-actions { justify-content: center; margin-bottom: 0; }
+
 .room-code {
   font-size: 1.6rem;
   letter-spacing: 0.12em;
