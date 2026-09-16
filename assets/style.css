@@ -69,6 +69,39 @@ header h1 { font-size: 1.4rem; margin: 0; letter-spacing: 0.01em; }
 
 #auth-area button:hover { background: var(--accent-hover); }
 
+.auth-menu-wrap { position: relative; }
+
+.auth-menu-dropdown {
+  position: absolute;
+  top: calc(100% + 0.6rem);
+  right: 0;
+  min-width: 200px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: 0 12px 32px rgba(58, 46, 34, 0.22);
+  z-index: 30;
+  padding: 0.4rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.auth-menu-dropdown button {
+  background: transparent !important;
+  color: var(--text) !important;
+  border: none;
+  border-radius: 8px;
+  padding: 0.6rem 0.75rem !important;
+  text-align: left;
+  cursor: pointer;
+  font-family: "Nunito", sans-serif;
+  font-weight: 600 !important;
+  font-size: 0.88rem !important;
+  white-space: nowrap;
+}
+.auth-menu-dropdown button:hover { background: var(--accent-soft) !important; }
+
 nav.main-nav {
   display: flex;
   gap: 0.6rem;
@@ -1670,9 +1703,14 @@ form#add-item-form button[type="submit"]:hover { background: var(--accent-hover)
   flex-wrap: wrap;
 }
 
-.pixelguess-input {
+.pixelguess-input-wrapper {
+  position: relative;
   flex: 1 1 220px;
   max-width: 320px;
+}
+
+.pixelguess-input {
+  width: 100%;
   border-radius: 8px;
   border: 1px solid var(--border);
   background: var(--bg);
@@ -1681,6 +1719,20 @@ form#add-item-form button[type="submit"]:hover { background: var(--accent-hover)
   font-family: "Nunito", sans-serif;
   font-size: 0.9rem;
 }
+
+.pixelguess-suggestions {
+  text-align: left;
+  max-height: 220px;
+}
+
+.pixelguess-suggestion-row {
+  padding: 0.5rem 0.85rem;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.88rem;
+}
+.pixelguess-suggestion-row:last-child { border-bottom: none; }
+.pixelguess-suggestion-row:hover { background: var(--accent-soft); }
 
 .pixelguess-form button[type="submit"] {
   background: var(--accent);

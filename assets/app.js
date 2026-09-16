@@ -383,42 +383,84 @@ async function initAuth() {
   });
 }
 
+// Un seul point d'entrée dans l'en-tête ("Se connecter" déconnecté, "Profil ▾" connecté) au
+// lieu des boutons Google/Email séparés — les deux méthodes de connexion existent toujours,
+// simplement regroupées dans un petit menu déroulant plutôt qu'affichées côte à côte en
+// permanence. Un seul menu ouvert à la fois : on referme les autres au clic ailleurs.
+function closeAuthMenus() {
+  document.querySelectorAll(".auth-menu-dropdown").forEach((m) => (m.hidden = true));
+}
+document.addEventListener("click", closeAuthMenus);
+
 function renderAuth() {
   el.authArea.innerHTML = "";
   el.notificationsArea.hidden = !currentUser;
+
+  const wrap = document.createElement("div");
+  wrap.className = "auth-menu-wrap";
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = "auth-menu-toggle";
+  const menu = document.createElement("div");
+  menu.className = "auth-menu-dropdown";
+  menu.hidden = true;
+  toggle.onclick = (e) => {
+    e.stopPropagation();
+    const wasHidden = menu.hidden;
+    closeAuthMenus();
+    menu.hidden = !wasHidden;
+  };
+
   if (currentUser) {
     const name = currentUser.user_metadata?.full_name || currentUser.email;
-    const span = document.createElement("span");
-    span.textContent = `Connecté : ${name}`;
-    const accountBtn = document.createElement("button");
-    accountBtn.type = "button";
-    accountBtn.textContent = "⚙️ Mon compte";
-    accountBtn.onclick = () => openAccountView();
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.textContent = "Se déconnecter";
-    btn.onclick = () => sb.auth.signOut();
-    el.authArea.append(span, accountBtn, btn);
+    toggle.textContent = `👤 ${name} ▾`;
+    menu.innerHTML = `
+      <button type="button" data-action="showcase">🖼️ Vitrine</button>
+      <button type="button" data-action="stats">📊 Statistiques</button>
+      <button type="button" data-action="settings">⚙️ Paramètres</button>
+      <button type="button" data-action="logout">Se déconnecter</button>
+    `;
+    menu.querySelector('[data-action="showcase"]').onclick = () => {
+      menu.hidden = true;
+      renderPublicShowcase({ userId: currentUser.id });
+    };
+    menu.querySelector('[data-action="stats"]').onclick = () => {
+      menu.hidden = true;
+      unsubscribeCommunityFeed();
+      switchView("stats");
+    };
+    menu.querySelector('[data-action="settings"]').onclick = () => {
+      menu.hidden = true;
+      openAccountView();
+    };
+    menu.querySelector('[data-action="logout"]').onclick = () => {
+      menu.hidden = true;
+      sb.auth.signOut();
+    };
     loadNotifications();
     subscribeNotifications();
   } else {
     unsubscribeNotifications();
-  }
-  if (!currentUser) {
-    const googleBtn = document.createElement("button");
-    googleBtn.type = "button";
-    googleBtn.textContent = "Se connecter avec Google";
-    googleBtn.onclick = () =>
+    toggle.textContent = "Se connecter";
+    menu.innerHTML = `
+      <button type="button" data-action="google">Se connecter avec Google</button>
+      <button type="button" data-action="email">✉️ Email / mot de passe</button>
+    `;
+    menu.querySelector('[data-action="google"]').onclick = () => {
+      menu.hidden = true;
       sb.auth.signInWithOAuth({
         provider: "google",
         options: { redirectTo: window.location.href },
       });
-    const emailBtn = document.createElement("button");
-    emailBtn.type = "button";
-    emailBtn.textContent = "✉️ Email / mot de passe";
-    emailBtn.onclick = () => openAuthModal("signin");
-    el.authArea.append(googleBtn, emailBtn);
+    };
+    menu.querySelector('[data-action="email"]').onclick = () => {
+      menu.hidden = true;
+      openAuthModal("signin");
+    };
   }
+
+  wrap.append(toggle, menu);
+  el.authArea.appendChild(wrap);
 }
 
 // ---------- notifications (nouveaux items des personnes suivies) ----------
@@ -4139,6 +4181,68 @@ function renderQuizRoomRound() {
   areaEl.appendChild(wrapper);
 }
 
+// ---------- Pixel Guess : autocomplétion de la réponse (solo & multi) ----------
+// Suggestions tirées du pool d'objets de la partie en cours (pas seulement la bonne réponse) :
+// ça limite les fautes de frappe ET élargit le choix, ce qui ajoute du doute/du piment plutôt
+// que de trivialiser le jeu. Pas de recherche serveur ici — juste un filtrage local sur une
+// liste déjà en mémoire (pool solo, ou pool du salon récupéré une fois par partie, voir
+// ensureRoomSuggestionTitles ci-dessous).
+function attachPixelGuessAutocomplete(input, getTitles) {
+  const box = document.createElement("div");
+  box.className = "pixelguess-suggestions dropdown-results";
+  box.hidden = true;
+  input.insertAdjacentElement("afterend", box);
+
+  const hide = () => {
+    box.hidden = true;
+    box.innerHTML = "";
+  };
+  input.addEventListener("input", () => {
+    const q = input.value.trim().toLowerCase();
+    if (!q) return hide();
+    const matches = [...new Set(getTitles())].filter((t) => t.toLowerCase().includes(q)).slice(0, 6);
+    if (!matches.length) return hide();
+    box.innerHTML = "";
+    matches.forEach((title) => {
+      const row = document.createElement("div");
+      row.className = "pixelguess-suggestion-row";
+      row.textContent = title;
+      // mousedown (pas click) : se déclenche avant le blur de l'input, sinon la liste se
+      // masquerait juste avant que le clic puisse être capté.
+      row.addEventListener("mousedown", (e) => {
+        e.preventDefault();
+        input.value = title;
+        hide();
+        input.focus();
+      });
+      box.appendChild(row);
+    });
+    box.hidden = false;
+  });
+  input.addEventListener("blur", () => setTimeout(hide, 150));
+}
+
+// Récupère une seule fois par partie les titres de tous les objets possédés (avec image) par
+// les participants du salon, pour alimenter l'autocomplétion de TOUS les joueurs (pas
+// seulement l'hôte, qui est le seul à connaître `combinedPool`). Repose sur la policy RLS
+// `collection_entries_select_room_participants`, qui autorise cette lecture croisée
+// uniquement pendant que le salon est `status = 'playing'`.
+async function ensureRoomSuggestionTitles() {
+  if (!currentGameRoom || currentGameRoom.room.game_slug !== "pixel_guess") return [];
+  if (currentGameRoom.suggestionTitles) return currentGameRoom.suggestionTitles;
+  currentGameRoom.suggestionTitles = []; // évite les requêtes concurrentes pendant le chargement
+  const participantIds = currentGameRoom.players.map((p) => p.user_id);
+  const { data } = await sb
+    .from("collection_entries")
+    .select("items(title, cover_image_url)")
+    .in("user_id", participantIds)
+    .eq("status", "owned");
+  currentGameRoom.suggestionTitles = [
+    ...new Set((data ?? []).filter((e) => e.items?.cover_image_url).map((e) => e.items.title)),
+  ];
+  return currentGameRoom.suggestionTitles;
+}
+
 // ---------- Pixel Guess : rendu de la manche en salon (image qui se dépixelise en continu
 // pendant toute la fenêtre de réponse, réponse libre plutôt qu'un QCM) ----------
 function renderPixelGuessRoomRound() {
@@ -4188,12 +4292,14 @@ function renderPixelGuessRoomRound() {
   } else if (question) {
     const form = document.createElement("form");
     form.className = "pixelguess-form";
-    form.innerHTML = `<input type="text" class="pixelguess-input" placeholder="Ton hypothèse..." autocomplete="off" /><button type="submit">Valider</button>`;
+    form.innerHTML = `<div class="pixelguess-input-wrapper"><input type="text" class="pixelguess-input" placeholder="Ton hypothèse..." autocomplete="off" /></div><button type="submit">Valider</button>`;
     const feedback = document.createElement("p");
     feedback.className = "pixelguess-feedback";
     wrapper.insertBefore(form, statusEl);
     wrapper.insertBefore(feedback, statusEl);
     const input = form.querySelector(".pixelguess-input");
+    ensureRoomSuggestionTitles(); // en tâche de fond, ne bloque pas l'affichage de la manche
+    attachPixelGuessAutocomplete(input, () => currentGameRoom?.suggestionTitles ?? []);
     form.onsubmit = (e) => {
       e.preventDefault();
       const guess = input.value.trim();
@@ -4467,7 +4573,9 @@ function renderPixelGuessSoloRound() {
     <p class="quiz-round-counter">Objet ${pixelSoloState.round}/5 — Score : ${pixelSoloState.score} — Essai ${pixelSoloState.attempt + 1}/3</p>
     <canvas class="pixelguess-canvas" width="240" height="240"></canvas>
     <form class="pixelguess-form">
-      <input type="text" class="pixelguess-input" placeholder="Titre de l'objet..." autocomplete="off" />
+      <div class="pixelguess-input-wrapper">
+        <input type="text" class="pixelguess-input" placeholder="Titre de l'objet..." autocomplete="off" />
+      </div>
       <button type="submit">Valider</button>
     </form>
     <p class="pixelguess-feedback"></p>
@@ -4480,6 +4588,7 @@ function renderPixelGuessSoloRound() {
   const input = wrapper.querySelector(".pixelguess-input");
   const feedback = wrapper.querySelector(".pixelguess-feedback");
   input.focus();
+  attachPixelGuessAutocomplete(input, () => pixelSoloState.pool.map((it) => it.title));
 
   drawPixelated(canvas, pixelSoloState.question.imageUrl, PIXEL_LEVELS[pixelSoloState.attempt]).catch(() => {
     feedback.textContent = "Impossible de charger l'image, passage à l'objet suivant.";
