@@ -3,7 +3,10 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY } from "./config.js";
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 // ---------- PWA : installable + app shell hors-ligne (voir sw.js) ----------
-if ("serviceWorker" in navigator) {
+// Inutile (et potentiellement source de conflits de cache) dans le wrapper mobile Capacitor :
+// les fichiers y sont déjà embarqués nativement dans l'app, donc déjà disponibles hors-ligne
+// sans aucun service worker.
+if ("serviceWorker" in navigator && !window.Capacitor?.isNativePlatform?.()) {
   window.addEventListener("load", () => {
     navigator.serviceWorker.register("./sw.js").catch(() => {
       // pas bloquant : le site fonctionne normalement sans service worker
@@ -444,6 +447,7 @@ async function initAuth() {
   const { data: { session } } = await sb.auth.getSession();
   currentUser = session?.user ?? null;
   renderAuth();
+  setupNativePush();
 
   sb.auth.onAuthStateChange((_event, session) => {
     currentUser = session?.user ?? null;
@@ -453,7 +457,54 @@ async function initAuth() {
     renderHomeMinigamesTile();
     renderHomeActivity();
     if (currentUser) loadMyCollection();
+    setupNativePush();
   });
+}
+
+// ---------- notifications push natives (Phase 13, wrapper mobile Capacitor) ----------
+// N'a d'effet que dans l'app mobile : `window.Capacitor` n'existe pas du tout sur le site web
+// classique (glanure.com), donc ce bloc entier est un no-op silencieux hors de ce contexte —
+// aucun risque de régression pour les visiteurs web. Le pont JS des plugins Capacitor
+// (`Capacitor.Plugins.PushNotifications`) est injecté automatiquement par le wrapper natif,
+// pas besoin d'import ES module supplémentaire ici.
+let nativePushSetupDone = false;
+async function setupNativePush() {
+  if (!window.Capacitor?.isNativePlatform?.() || !currentUser || nativePushSetupDone) return;
+  const PushNotifications = window.Capacitor.Plugins?.PushNotifications;
+  if (!PushNotifications) return;
+  nativePushSetupDone = true;
+
+  try {
+    let perm = await PushNotifications.checkPermissions();
+    if (perm.receive !== "granted") {
+      perm = await PushNotifications.requestPermissions();
+    }
+    if (perm.receive !== "granted") {
+      nativePushSetupDone = false;
+      return;
+    }
+
+    PushNotifications.addListener("registration", async (token) => {
+      const platform = window.Capacitor.getPlatform(); // "android" | "ios"
+      await sb
+        .from("push_tokens")
+        .upsert({ user_id: currentUser.id, token: token.value, platform }, { onConflict: "user_id,token" });
+    });
+    PushNotifications.addListener("registrationError", (err) => {
+      console.error("Erreur d'enregistrement push :", err);
+    });
+    // tap sur une notification reçue : ouvre directement l'item concerné, comme depuis le
+    // centre de notifications in-app (même logique que renderNotifications())
+    PushNotifications.addListener("pushNotificationActionPerformed", (action) => {
+      const itemId = action.notification?.data?.item_id;
+      if (itemId) openSharedItem(itemId);
+    });
+
+    await PushNotifications.register();
+  } catch (e) {
+    nativePushSetupDone = false;
+    console.error("Init push native impossible :", e);
+  }
 }
 
 // Un seul point d'entrée dans l'en-tête ("Se connecter" déconnecté, "Profil ▾" connecté) au
