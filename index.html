@@ -241,7 +241,17 @@
 
       <div class="stats-section">
         <h3>🖼️ Pixel Guess</h3>
-        <p class="empty">Devine l'objet caché derrière une image pixelisée. Bientôt disponible.</p>
+        <p class="empty">Devine l'objet caché derrière une image pixelisée, de plus en plus nette.</p>
+        <div class="minigame-actions">
+          <button type="button" id="pixelguess-solo-btn">▶️ Jouer en solo (classé)</button>
+          <button type="button" id="pixelguess-multi-ranked-btn">🏆 Créer un salon classé</button>
+          <button type="button" id="pixelguess-multi-casual-btn">🎈 Créer un salon amical (non classé)</button>
+          <div class="minigame-join-row">
+            <input type="text" id="pixelguess-join-code" placeholder="Code du salon" maxlength="6" autocomplete="off" />
+            <button type="button" id="pixelguess-join-btn">Rejoindre</button>
+          </div>
+        </div>
+        <div id="pixelguess-area"></div>
       </div>
 
       <div class="stats-section">
