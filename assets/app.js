@@ -448,6 +448,7 @@ async function initAuth() {
   currentUser = session?.user ?? null;
   renderAuth();
   setupNativePush();
+  setupNativeAuthCallback();
 
   sb.auth.onAuthStateChange((_event, session) => {
     currentUser = session?.user ?? null;
@@ -505,6 +506,44 @@ async function setupNativePush() {
     nativePushSetupDone = false;
     console.error("Init push native impossible :", e);
   }
+}
+
+// ---------- retour de connexion Google dans l'app mobile (Phase 13bis, wrapper Capacitor) ----------
+// Complète le clic "Se connecter avec Google" ci-dessous (menu.querySelector('[data-action="google"]'))
+// qui ouvre l'authentification dans l'onglet in-app Capacitor plutôt que de rediriger la page.
+// Une fois connecté, Google/Supabase redirige vers notre schéma d'URL personnalisé
+// (com.glanure.app://auth-callback#access_token=...&refresh_token=... ou ?code=... selon le flux),
+// ce que le système transmet à l'app via l'évènement "appUrlOpen" du plugin natif `App` — jamais
+// déclenché sur le site web classique, donc aucun impact hors de l'app mobile.
+let nativeAuthCallbackSetup = false;
+function setupNativeAuthCallback() {
+  if (!window.Capacitor?.isNativePlatform?.() || nativeAuthCallbackSetup) return;
+  const { App, Browser } = window.Capacitor.Plugins ?? {};
+  if (!App) return;
+  nativeAuthCallbackSetup = true;
+
+  App.addListener("appUrlOpen", async ({ url }) => {
+    if (!url || !url.startsWith("com.glanure.app://auth-callback")) return;
+    try {
+      const hashIndex = url.indexOf("#");
+      const queryIndex = url.indexOf("?");
+      const params = new URLSearchParams(
+        hashIndex !== -1 ? url.slice(hashIndex + 1) : queryIndex !== -1 ? url.slice(queryIndex + 1) : ""
+      );
+      const code = params.get("code");
+      const accessToken = params.get("access_token");
+      const refreshToken = params.get("refresh_token");
+      if (code) {
+        await sb.auth.exchangeCodeForSession(code);
+      } else if (accessToken && refreshToken) {
+        await sb.auth.setSession({ access_token: accessToken, refresh_token: refreshToken });
+      }
+    } catch (e) {
+      console.error("Callback de connexion Google natif impossible :", e);
+    } finally {
+      Browser?.close().catch(() => {});
+    }
+  });
 }
 
 // Un seul point d'entrée dans l'en-tête ("Se connecter" déconnecté, "Profil ▾" connecté) au
@@ -570,12 +609,26 @@ function renderAuth() {
       <button type="button" data-action="google">Se connecter avec Google</button>
       <button type="button" data-action="email">✉️ Email / mot de passe</button>
     `;
-    menu.querySelector('[data-action="google"]').onclick = () => {
+    menu.querySelector('[data-action="google"]').onclick = async () => {
       menu.hidden = true;
-      sb.auth.signInWithOAuth({
+      // Dans l'app mobile, laisser Supabase rediriger la page (comportement web par défaut)
+      // ouvre le navigateur système sans retour possible vers l'app : Google refuse même
+      // souvent de s'authentifier dans une simple WebView embarquée. On ouvre donc l'URL
+      // d'authentification dans l'onglet in-app Capacitor (Browser), qui sait rediriger vers
+      // un schéma d'URL personnalisé (com.glanure.app://auth-callback) capté par
+      // setupNativeAuthCallback() ci-dessous — voir aussi le README du wrapper mobile pour la
+      // configuration native (AndroidManifest) et Supabase (URL de redirection) requise.
+      const isNative = window.Capacitor?.isNativePlatform?.();
+      const { data, error } = await sb.auth.signInWithOAuth({
         provider: "google",
-        options: { redirectTo: window.location.href },
+        options: {
+          redirectTo: isNative ? "com.glanure.app://auth-callback" : window.location.href,
+          skipBrowserRedirect: isNative,
+        },
       });
+      if (isNative && !error && data?.url) {
+        await window.Capacitor.Plugins?.Browser?.open({ url: data.url });
+      }
     };
     menu.querySelector('[data-action="email"]').onclick = () => {
       menu.hidden = true;
