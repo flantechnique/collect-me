@@ -15,6 +15,8 @@
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.2/dist/jspdf.plugin.autotable.js"></script>
 </head>
 <body>
   <header>
@@ -169,6 +171,13 @@
         <button id="stats-export-csv-btn" type="button">⬇️ Exporter en CSV</button>
         <button id="stats-export-json-btn" type="button">⬇️ Exporter en JSON</button>
         <button id="stats-export-reimport-btn" type="button" title="Un fichier par catégorie, au format exact du modèle d'import — pour ré-importer telle quelle ailleurs">⬇️ Export réimportable</button>
+        <button id="stats-export-pdf-btn" type="button" title="Un document récapitulatif avec la valeur de chaque item — utile par exemple pour une déclaration d'assurance">📄 Rapport PDF</button>
+      </div>
+
+      <div class="stats-section">
+        <h3>📈 Évolution de la valeur</h3>
+        <p class="empty">Valeur cumulée de ta collection au fil de tes acquisitions (prix payé, sinon la meilleure estimation disponible).</p>
+        <div id="value-history-content"></div>
       </div>
 
       <div class="stats-section">
