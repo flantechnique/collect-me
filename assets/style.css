@@ -609,6 +609,26 @@ main { padding: 1.75rem; max-width: 1080px; margin: 0 auto; }
   overflow: hidden;
 }
 
+/* "Continuer" (liste non vide) / "Je commence" (état vide) — refonte accueil v2, Phase 11 */
+.home-resume-cta {
+  display: block;
+  margin-top: 0.85rem;
+  padding: 0.65rem 1.4rem;
+  background: var(--accent);
+  color: #fff8f0;
+  border: none;
+  border-radius: 10px;
+  font-family: "Nunito", sans-serif;
+  font-weight: 700;
+  cursor: pointer;
+  transition: transform 0.15s ease;
+}
+
+.home-resume-cta:hover { transform: translateY(-2px); }
+
+/* ---------- refonte accueil v2 (Phase 11) : onglets "L'actualité de la collection" ---------- */
+.home-activity-block #home-activity-tabs { margin-bottom: 1rem; }
+
 /* ---------- refonte accueil (Phase 11) : mini-tuile "Mini-jeux du jour" ---------- */
 .home-minigames-tile {
   display: flex;

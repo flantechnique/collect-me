@@ -30,12 +30,14 @@ const el = {
   viewHomeBtn: document.getElementById("view-home"),
   viewCollectionBtn: document.getElementById("view-collection"),
   homeView: document.getElementById("home-view"),
-  homeCategories: document.getElementById("home-categories"),
+  discoverCategories: document.getElementById("discover-categories"),
   homeResume: document.getElementById("home-resume"),
   homeResumeContent: document.getElementById("home-resume-content"),
   homeMinigamesTile: document.getElementById("home-minigames-tile"),
   homeMinigamesTileSub: document.getElementById("home-minigames-tile-sub"),
   homeMinigamesTileBtn: document.getElementById("home-minigames-tile-btn"),
+  homeActivityTabs: document.getElementById("home-activity-tabs"),
+  homeActivityContent: document.getElementById("home-activity-content"),
   globalSearchInput: document.getElementById("global-search-input"),
   globalSearchResults: document.getElementById("global-search-results"),
   backToHomeBtn: document.getElementById("back-to-home"),
@@ -119,7 +121,6 @@ const el = {
   compareSummary: document.getElementById("compare-summary"),
   compareResult: document.getElementById("compare-result"),
   digestContent: document.getElementById("digest-content"),
-  wantlistAlertsContent: document.getElementById("wantlist-alerts-content"),
   onThisDaySection: document.getElementById("on-this-day-section"),
   onThisDayContent: document.getElementById("on-this-day-content"),
   wrappedGenerateBtn: document.getElementById("wrapped-generate-btn"),
@@ -414,9 +415,10 @@ async function initAuth() {
   sb.auth.onAuthStateChange((_event, session) => {
     currentUser = session?.user ?? null;
     renderAuth();
-    if (categories.length) renderHome(); // affiche/masque la tuile "Nouvelle collection" selon la connexion
+    if (categories.length) renderCategoryGrid(); // affiche/masque la tuile "Nouvelle collection" selon la connexion
     renderHomeResume();
     renderHomeMinigamesTile();
+    renderHomeActivity();
     if (currentUser) loadMyCollection();
   });
 }
@@ -564,6 +566,18 @@ function renderNotifications() {
           <div class="notification-time">${timeAgo(n.created_at)}</div>
         </div>
       `;
+    } else if (n.type === "wantlist_match") {
+      // ancien bloc "Alertes wantlist" de Découvrir, converti en notification (refonte
+      // Découvrir, Phase 11) — déclenchée serveur par un trigger SQL quand un item de la
+      // wantlist de quelqu'un passe "à vendre" ; clic → droit sur l'item (voir plus bas).
+      row.innerHTML = `
+        <img src="${n.payload?.cover_image_url ?? ""}" alt="" onerror="this.style.visibility='hidden'" />
+        <div class="notification-text">
+          <span>${n.payload?.icon ?? ""} ${escapeHtml(n.payload?.title ?? "Un item")}</span> de ta wantlist est à vendre
+          chez <strong>${escapeHtml(n.payload?.seller_name ?? "quelqu'un")}</strong>${n.payload?.asking_price ? ` (${n.payload.asking_price} €)` : ""}
+          <div class="notification-time">${timeAgo(n.created_at)}</div>
+        </div>
+      `;
     } else {
       row.innerHTML = `<div class="notification-text">${escapeHtml(n.type)}</div>`;
     }
@@ -677,7 +691,7 @@ async function loadCategories() {
     el.collectionFilter.appendChild(opt);
   });
 
-  renderHome();
+  renderCategoryGrid();
   switchView("home");
 }
 
@@ -687,14 +701,17 @@ async function loadCategories() {
 // Musique/Vidéo/Papier tombe dans "Objets & collections personnalisées" (timbres, monnaies,
 // TCG, et toute catégorie créée par un utilisateur) — pas besoin de savoir si une catégorie
 // est "custom", il suffit de ne pas la lister ailleurs.
+// Relocalisée de l'accueil vers "Découvrir" (refonte accueil v2, Phase 11) : l'accueil met
+// maintenant en avant l'activité (derniers ajouts, populaire, amis, artistes suivis) plutôt
+// que la simple navigation par catégorie.
 const CATEGORY_FAMILIES = [
   { name: "Musique", icon: "🎵", slugs: ["vinyl", "cd"] },
   { name: "Vidéo", icon: "🎬", slugs: ["dvd", "movie_poster", "video_game"] },
   { name: "Papier", icon: "📖", slugs: ["book"] },
 ];
 
-function renderHome() {
-  el.homeCategories.innerHTML = "";
+function renderCategoryGrid() {
+  el.discoverCategories.innerHTML = "";
   const familyBuckets = CATEGORY_FAMILIES.map((f) => ({ ...f, cats: [] }));
   const otherBucket = { name: "Objets & collections personnalisées", icon: "🧩", cats: [] };
   categories.forEach((cat) => {
@@ -742,25 +759,39 @@ function renderHome() {
     }
 
     group.appendChild(grid);
-    el.homeCategories.appendChild(group);
+    el.discoverCategories.appendChild(group);
   });
 }
 
-// ---------- accueil : "reprendre où j'en étais" (refonte accueil, Phase 11) ----------
+// ---------- accueil : "Mes derniers ajouts" (refonte accueil, Phase 11 — renommé et rendu
+// actionnable en v2) ----------
 // Derniers exemplaires ajoutés à la collection (toutes catégories), cliquables vers leur
 // fiche détail — réutilise fetchCollectionEntries() (déjà triée par created_at desc) plutôt
-// que d'écrire une requête dédiée.
+// que d'écrire une requête dédiée. Toujours affiché (connecté) : liste + bouton "Continuer"
+// vers Découvrir si la collection contient déjà quelque chose, sinon état vide avec un appel
+// à l'action "Je commence" qui mène au même endroit (Découvrir, où se trouve maintenant la
+// navigation par catégories pour commencer à ajouter des items).
 async function renderHomeResume() {
   if (!currentUser) {
     el.homeResume.hidden = true;
     return;
   }
+  el.homeResume.hidden = false;
   const entries = await fetchCollectionEntries();
   const recent = entries.slice(0, 6);
-  el.homeResume.hidden = recent.length === 0;
-  if (!recent.length) return;
 
   el.homeResumeContent.innerHTML = "";
+  if (!recent.length) {
+    el.homeResumeContent.innerHTML = `<p class="empty">Rien à signaler ici, ajoutons quelque chose !</p>`;
+    const startBtn = document.createElement("button");
+    startBtn.type = "button";
+    startBtn.className = "home-resume-cta";
+    startBtn.textContent = "Je commence";
+    startBtn.onclick = () => switchView("fun");
+    el.homeResumeContent.appendChild(startBtn);
+    return;
+  }
+
   const list = document.createElement("div");
   list.className = "home-resume-items";
   recent.forEach((entry) => {
@@ -777,6 +808,13 @@ async function renderHomeResume() {
     list.appendChild(card);
   });
   el.homeResumeContent.appendChild(list);
+
+  const continueBtn = document.createElement("button");
+  continueBtn.type = "button";
+  continueBtn.className = "home-resume-cta";
+  continueBtn.textContent = "Continuer";
+  continueBtn.onclick = () => switchView("fun");
+  el.homeResumeContent.appendChild(continueBtn);
 }
 
 // ---------- accueil : mini-tuile "Mini-jeux du jour" (refonte accueil, Phase 11) ----------
@@ -821,6 +859,138 @@ async function renderHomeMinigamesTile() {
 }
 
 el.homeMinigamesTileBtn.addEventListener("click", () => switchView("minigames"));
+
+// ---------- accueil : "L'actualité de la collection" (refonte accueil v2, Phase 11) ----------
+// Remplace l'ancienne grille de catégories de l'accueil (relocalisée dans Découvrir, voir
+// renderCategoryGrid) par trois onglets d'activité, tous basés sur des vitrines publiques
+// (public_showcase_items) donc sans jamais toucher à une collection privée d'autrui :
+// - Populaire (24h) : items ajoutés publiquement dans les dernières 24h, classés par nombre
+//   total de collectionneurs qui les possèdent (item_ownership_counts) — utile même déconnecté.
+// - Mes amis : derniers ajouts publics des comptes suivis (user_follows) — connecté uniquement.
+// - Artistes suivis : réutilise loadCreatorDigest (même contenu que le bloc du même nom sur
+//   Découvrir), simplement rendu dans le conteneur de l'accueil — connecté uniquement.
+let homeActivityTab = "popular";
+
+el.homeActivityTabs.querySelectorAll("button").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    homeActivityTab = btn.dataset.value;
+    [...el.homeActivityTabs.children].forEach((b) => b.classList.toggle("active", b === btn));
+    renderHomeActivity();
+  });
+});
+
+async function renderHomeActivity() {
+  el.homeActivityContent.innerHTML = "<p class='empty'>Chargement...</p>";
+  if (homeActivityTab === "friends") return renderHomeActivityFriends();
+  if (homeActivityTab === "artists") return renderHomeActivityArtists();
+  return renderHomeActivityPopular();
+}
+
+function renderHomeActivityGrid(items) {
+  el.homeActivityContent.innerHTML = "";
+  const grid = document.createElement("div");
+  grid.className = "pokedex-grid";
+  items.forEach(({ item_id, title, cover_image_url, category_icon, subtitle }) => {
+    const card = document.createElement("button");
+    card.type = "button";
+    card.className = "pokedex-card owned";
+    card.innerHTML = `
+      <img src="${cover_image_url ?? ""}" alt="" onerror="this.style.visibility='hidden'" />
+      <div class="pokedex-title">${category_icon ?? ""} ${escapeHtml(title)}</div>
+      ${subtitle ? `<p class="empty recommendation-reason">${subtitle}</p>` : ""}
+    `;
+    card.onclick = () => openSharedItem(item_id);
+    grid.appendChild(card);
+  });
+  el.homeActivityContent.appendChild(grid);
+}
+
+async function renderHomeActivityPopular() {
+  const since = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
+  const { data: recentEntries, error } = await sb
+    .from("public_showcase_items")
+    .select("item_id, title, cover_image_url, category_icon, created_at")
+    .gte("created_at", since)
+    .order("created_at", { ascending: false });
+  if (error || !recentEntries?.length) {
+    el.homeActivityContent.innerHTML =
+      "<p class='empty'>Rien d'ajouté publiquement dans les dernières 24h pour l'instant.</p>";
+    return;
+  }
+
+  const uniqueItems = new Map();
+  recentEntries.forEach((e) => {
+    if (!uniqueItems.has(e.item_id)) uniqueItems.set(e.item_id, e);
+  });
+  const ids = [...uniqueItems.keys()];
+
+  const { data: counts } = await sb
+    .from("item_ownership_counts")
+    .select("item_id, cnt")
+    .eq("status", "owned")
+    .in("item_id", ids);
+  const countMap = new Map((counts ?? []).map((c) => [c.item_id, c.cnt]));
+
+  const ranked = [...uniqueItems.values()]
+    .map((e) => ({ ...e, popularity: countMap.get(e.item_id) ?? 1 }))
+    .sort((a, b) => b.popularity - a.popularity || new Date(b.created_at) - new Date(a.created_at))
+    .slice(0, 12)
+    .map((e) => ({ ...e, subtitle: `${e.popularity} collectionneur${e.popularity > 1 ? "s" : ""}` }));
+
+  renderHomeActivityGrid(ranked);
+}
+
+async function renderHomeActivityFriends() {
+  if (!currentUser) {
+    el.homeActivityContent.innerHTML = "<p class='empty'>Connecte-toi pour voir les ajouts de tes amis.</p>";
+    return;
+  }
+  const { data: follows } = await sb.from("user_follows").select("followed_id").eq("follower_id", currentUser.id);
+  const followedIds = (follows ?? []).map((f) => f.followed_id);
+  if (!followedIds.length) {
+    el.homeActivityContent.innerHTML =
+      "<p class='empty'>Tu ne suis encore personne — suis d'autres collectionneurs depuis leur vitrine publique pour voir leurs ajouts ici.</p>";
+    return;
+  }
+
+  const { data: items, error } = await sb
+    .from("public_showcase_items")
+    .select("item_id, title, cover_image_url, category_icon, created_at, user_id")
+    .in("user_id", followedIds)
+    .order("created_at", { ascending: false })
+    .limit(20);
+  if (error || !items?.length) {
+    el.homeActivityContent.innerHTML = "<p class='empty'>Aucun ajout récent chez les personnes que tu suis.</p>";
+    return;
+  }
+
+  const userIds = [...new Set(items.map((i) => i.user_id))];
+  const { data: identities } = await sb.from("player_identities").select("*").in("id", userIds);
+  const nameById = new Map(
+    (identities ?? []).map((p) => [p.id, p.username ? `@${p.username}` : p.display_name || "Quelqu'un"])
+  );
+
+  const uniqueItems = new Map();
+  items.forEach((e) => {
+    if (!uniqueItems.has(e.item_id)) uniqueItems.set(e.item_id, e);
+  });
+
+  const rows = [...uniqueItems.values()].slice(0, 12).map((e) => ({
+    ...e,
+    subtitle: `ajouté par ${escapeHtml(nameById.get(e.user_id) ?? "quelqu'un")}`,
+  }));
+  renderHomeActivityGrid(rows);
+}
+
+async function renderHomeActivityArtists() {
+  if (!currentUser) {
+    el.homeActivityContent.innerHTML =
+      "<p class='empty'>Connecte-toi pour voir les nouveautés de tes artistes suivis.</p>";
+    return;
+  }
+  const entries = collectionEntriesCache.length ? collectionEntriesCache : await fetchCollectionEntries();
+  await loadCreatorDigest(entries, el.homeActivityContent);
+}
 
 // ---------- création d'une collection personnalisée (self-service) ----------
 // Les catégories de base (vinyles, jeux vidéo...) sont gérées par l'admin, mais
@@ -1708,10 +1878,14 @@ function switchView(view) {
   if (view === "home") {
     renderHomeResume();
     renderHomeMinigamesTile();
+    renderHomeActivity();
   }
   if (view === "collection") loadMyCollection();
   if (view === "stats") loadStats();
-  if (view === "fun") loadFunView();
+  if (view === "fun") {
+    renderCategoryGrid();
+    loadFunView();
+  }
   if (view === "minigames") loadMinigamesView();
   if (view !== "minigames") leaveGameRoomChannel(); // quitte proprement le salon multijoueur si on change de vue
   if (view !== "legal") lastMainView = view;
@@ -2465,11 +2639,16 @@ async function fetchCollectionEntries() {
 async function loadStats() {
   if (!currentUser) {
     el.statsContent.innerHTML = "<p class='empty'>Connecte-toi pour voir tes statistiques.</p>";
+    el.timelineContent.innerHTML = "";
+    el.wrappedContent.innerHTML = "";
     return;
   }
   el.statsContent.innerHTML = "<p class='empty'>Chargement...</p>";
+  el.timelineContent.innerHTML = "<p class='empty'>Chargement...</p>";
   const entries = await fetchCollectionEntries();
   renderStats(entries);
+  renderTimeline(entries);
+  el.wrappedContent.innerHTML = "";
 }
 
 function renderStats(entries) {
@@ -2692,33 +2871,29 @@ function exportReimportableCsv() {
 // ---------- "Découvrir" : frise chronologique, roulette, badges, quiz tracklist ----------
 async function loadFunView() {
   if (!currentUser) {
-    el.timelineContent.innerHTML = "<p class='empty'>Connecte-toi pour découvrir ta collection.</p>";
     el.badgesContent.innerHTML = "";
     el.rouletteResult.innerHTML = "";
     el.quizQuestion.innerHTML = "";
     return;
   }
-  el.timelineContent.innerHTML = "<p class='empty'>Chargement...</p>";
   const entries = await fetchCollectionEntries();
   loadCreatorDigest(entries);
-  renderWantlistAlerts(entries);
   renderOnThisDay(entries);
   renderRecommendations(entries);
-  renderTimeline(entries);
   renderBadges(entries);
   el.rouletteResult.innerHTML = "";
   el.quizQuestion.innerHTML = "";
-  el.compareResult.innerHTML = "";
-  el.compareSummary.innerHTML = "";
-  el.wrappedContent.innerHTML = "";
 }
 
 el.funAccountLink.addEventListener("click", () => openAccountView());
 
 // ---- digest des nouveautés des créateurs suivis : une recherche "œuvres du créateur" par
 // créateur suivi (même mode que la page créateur), en écartant ce qui est déjà possédé ----
-async function loadCreatorDigest(entries) {
-  el.digestContent.innerHTML = "";
+// Prend un conteneur cible en paramètre (défaut : le bloc "Nouveautés de mes créateurs
+// suivis" de Découvrir) pour pouvoir aussi l'afficher dans l'onglet "Artistes suivis" de
+// l'accueil (refonte accueil v2, Phase 11) sans dupliquer la logique.
+async function loadCreatorDigest(entries, targetEl = el.digestContent) {
+  targetEl.innerHTML = "";
   if (!currentUser) return;
 
   const { data: followed, error } = await sb
@@ -2727,14 +2902,14 @@ async function loadCreatorDigest(entries) {
     .eq("user_id", currentUser.id)
     .order("created_at", { ascending: false });
   if (error || !followed?.length) {
-    el.digestContent.innerHTML =
+    targetEl.innerHTML =
       "<p class='empty'>Suis un artiste, un auteur, un studio ou un réalisateur depuis sa page pour voir ses nouveautés ici.</p>";
     return;
   }
 
   const { data: { session } } = await sb.auth.getSession();
   if (!session) {
-    el.digestContent.innerHTML = "<p class='empty'>Connecte-toi pour voir les nouveautés.</p>";
+    targetEl.innerHTML = "<p class='empty'>Connecte-toi pour voir les nouveautés.</p>";
     return;
   }
 
@@ -2745,7 +2920,7 @@ async function loadCreatorDigest(entries) {
       Object.values(e.items.external_ids || {}).forEach((v) => ownedExternalIds.add(String(v)));
     });
 
-  el.digestContent.innerHTML = "<p class='empty'>Recherche des nouveautés...</p>";
+  targetEl.innerHTML = "<p class='empty'>Recherche des nouveautés...</p>";
   const sections = [];
 
   for (const follow of followed) {
@@ -2803,58 +2978,19 @@ async function loadCreatorDigest(entries) {
     }
   }
 
-  el.digestContent.innerHTML = "";
+  targetEl.innerHTML = "";
   if (!sections.length) {
-    el.digestContent.innerHTML =
+    targetEl.innerHTML =
       "<p class='empty'>Pas de nouveauté détectée pour tes créateurs suivis pour l'instant.</p>";
     return;
   }
-  sections.forEach((s) => el.digestContent.appendChild(s));
+  sections.forEach((s) => targetEl.appendChild(s));
 }
 
-// ---- alertes wantlist : croise les items "recherchés" avec public_for_sale_items (les
-// vendeurs ayant activé leur vitrine publique), sans jamais toucher aux collections privées
-// d'autrui — seulement ce que chacun a lui-même choisi de rendre visible ----
-async function renderWantlistAlerts(entries) {
-  const wanted = entries.filter((e) => e.status === "wanted");
-  if (!wanted.length) {
-    el.wantlistAlertsContent.innerHTML = "<p class='empty'>Ajoute des items à ta wantlist pour être alerté·e s'ils apparaissent à la vente.</p>";
-    return;
-  }
-  el.wantlistAlertsContent.innerHTML = "<p class='empty'>Recherche en cours...</p>";
-  const wantedIds = [...new Set(wanted.map((e) => e.item_id))];
-  const { data: matches, error } = await sb
-    .from("public_for_sale_items")
-    .select("*")
-    .in("item_id", wantedIds)
-    .neq("user_id", currentUser.id);
-
-  if (error || !matches?.length) {
-    el.wantlistAlertsContent.innerHTML = "<p class='empty'>Rien à la vente pour l'instant parmi tes items recherchés.</p>";
-    return;
-  }
-
-  el.wantlistAlertsContent.innerHTML = `<p>${matches.length} item${matches.length > 1 ? "s" : ""} de ta wantlist ${matches.length > 1 ? "sont" : "est"} à la vente :</p>`;
-  const grid = document.createElement("div");
-  grid.className = "pokedex-grid";
-  matches.forEach((item) => {
-    const sellerLink = item.seller_username ? `?u=${item.seller_username}` : `?showcase=${item.user_id}`;
-    const sellerName = item.seller_username ? `@${item.seller_username}` : (item.seller_display_name || "un·e collectionneur·se");
-    const card = document.createElement("a");
-    card.href = sellerLink;
-    card.target = "_blank";
-    card.rel = "noopener";
-    card.className = "pokedex-card owned";
-    card.innerHTML = `
-      <img src="${item.cover_image_url ?? ""}" alt="" onerror="this.style.visibility='hidden'" />
-      <div class="pokedex-title">${item.category_icon ?? ""} ${escapeHtml(item.title)}</div>
-      <p class="empty recommendation-reason">${item.asking_price ? `${item.asking_price} € — ` : ""}chez ${escapeHtml(sellerName)}</p>
-    `;
-    grid.appendChild(card);
-  });
-  el.wantlistAlertsContent.innerHTML = "";
-  el.wantlistAlertsContent.appendChild(grid);
-}
+// Les alertes wantlist ne sont plus une section de Découvrir : elles arrivent maintenant
+// directement en notification (type "wantlist_match", déclenchée serveur par un trigger SQL
+// quand un item de la wantlist de quelqu'un passe "à vendre" chez un utilisateur en vitrine
+// publique), cliquable pour aller droit sur l'item — voir renderNotifications().
 
 // ---- "Ce jour-là" : les items ajoutés à cette même date (jour+mois) les années précédentes
 // — priorité à la date d'acquisition renseignée par l'utilisateur, sinon la date d'ajout à
@@ -4032,6 +4168,10 @@ function loadMinigamesView() {
   if (!quizSoloState && !currentGameRoom) el.quizplaylistArea.innerHTML = "";
   if (!pixelSoloState && !currentGameRoom) el.pixelguessArea.innerHTML = "";
   if (!currentGameRoom) el.guessOwnerArea.innerHTML = "";
+  // "Duel avec un ami" (relocalisé depuis Découvrir, refonte accueil v2, Phase 11) : on
+  // repart d'un état propre à chaque visite de l'onglet, comme avant sur Découvrir.
+  el.compareResult.innerHTML = "";
+  el.compareSummary.innerHTML = "";
   // Nettoyage opportuniste des salons abandonnés/terminés (trust & safety, Phase 11) : pas de
   // cron, juste une purge à chaque visite de l'onglet — largement suffisant à l'échelle d'une
   // app perso. Best-effort, ne doit jamais bloquer l'affichage.
