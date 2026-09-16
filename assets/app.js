@@ -187,6 +187,8 @@ const el = {
   showcaseWishlistSection: document.getElementById("showcase-wishlist-section"),
   showcaseWishlistOwnNote: document.getElementById("showcase-wishlist-own-note"),
   showcaseWishlistContent: document.getElementById("showcase-wishlist-content"),
+  showcaseBadgesSection: document.getElementById("showcase-badges-section"),
+  showcaseBadgesContent: document.getElementById("showcase-badges-content"),
   showcaseActivitySection: document.getElementById("showcase-activity-section"),
   showcaseActivityContent: document.getElementById("showcase-activity-content"),
   collectionPrintLabelsBtn: document.getElementById("collection-print-labels-btn"),
@@ -5074,6 +5076,7 @@ async function renderPublicShowcase({ userId, username }) {
   }
 
   await renderShowcaseWishlist(wishlistItems ?? [], userId);
+  await renderShowcaseBadges(items ?? [], wishlistItems ?? []);
 
   // fil d'activité : les derniers ajouts, façon Letterboxd — chaque exemplaire ajouté compte
   // comme un événement, y compris un doublon d'un item déjà présent
@@ -5498,6 +5501,46 @@ function computeBadgeStats(entries) {
     totalSpent,
     yearSpread,
   };
+}
+
+// ---------- badges affichés sur le profil public (Phase 18) ----------
+// Version allégée de renderBadges ci-dessous : ne s'appuie que sur ce que la vitrine expose déjà
+// publiquement (public_showcase_items respecte déjà le statut "owned" et la confidentialité fine
+// par exemplaire de la Phase 16 -- showcase_hidden ; public_wishlist_items pour la wantlist).
+// Aucun prix payé ni année d'acquisition dans ces vues, donc les badges "valeur" et "décennie"
+// (voir BADGE_DEFS) ne sont pas calculables ici et sont volontairement omis plutôt que d'élargir
+// ces vues publiques à des données plus sensibles.
+const PUBLIC_BADGE_DEFS = [
+  { icon: "🥇", label: "Premier item", check: (s) => s.totalOwned >= 1 },
+  { icon: "🔟", label: "10 exemplaires", check: (s) => s.totalOwned >= 10 },
+  { icon: "💯", label: "50 exemplaires", check: (s) => s.totalOwned >= 50 },
+  { icon: "🏛️", label: "100 exemplaires", check: (s) => s.totalOwned >= 100 },
+  { icon: "🎯", label: "5 catégories différentes", check: (s) => s.categoriesOwned >= 5 },
+  { icon: "🌈", label: "Toutes les catégories", check: (s) => s.categoriesTotal > 0 && s.categoriesOwned >= s.categoriesTotal },
+  { icon: "🌟", label: "Une wantlist", check: (s) => s.totalWanted >= 1 },
+];
+
+async function renderShowcaseBadges(items, wishlistItems) {
+  if (!categories.length) await loadCategories();
+  const stats = {
+    totalOwned: items.length,
+    categoriesOwned: new Set(items.map((i) => i.category_slug)).size,
+    categoriesTotal: categories.length,
+    totalWanted: wishlistItems.length,
+  };
+  const unlocked = PUBLIC_BADGE_DEFS.filter((b) => b.check(stats));
+  if (!unlocked.length) {
+    el.showcaseBadgesSection.hidden = true;
+    return;
+  }
+  el.showcaseBadgesSection.hidden = false;
+  el.showcaseBadgesContent.innerHTML = "";
+  unlocked.forEach((badge) => {
+    const card = document.createElement("div");
+    card.className = "badge-card unlocked";
+    card.innerHTML = `<div class="badge-icon">${badge.icon}</div><div class="badge-label">${badge.label}</div>`;
+    el.showcaseBadgesContent.appendChild(card);
+  });
 }
 
 function renderBadges(entries) {
