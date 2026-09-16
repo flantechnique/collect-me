@@ -1490,6 +1490,104 @@ form#add-item-form button[type="submit"]:hover { background: var(--accent-hover)
   font-size: 0.72rem;
 }
 
+/* ---------- interactions sociales sur la Vitrine (j'aime + commentaires, Phase 12) ---------- */
+.pokedex-card-wrap { display: flex; flex-direction: column; gap: 0.4rem; }
+
+.showcase-reaction-container { display: flex; flex-direction: column; gap: 0.4rem; }
+
+.showcase-reactions { display: flex; gap: 0.4rem; }
+
+.showcase-like-btn,
+.showcase-comment-toggle {
+  flex: 1;
+  background: rgba(255, 250, 241, 0.86);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.3rem 0.4rem;
+  font-size: 0.78rem;
+  cursor: pointer;
+  color: var(--text);
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.showcase-like-btn:hover,
+.showcase-comment-toggle:hover { border-color: var(--accent); }
+
+.showcase-like-btn.liked { border-color: var(--accent); background: var(--accent-soft); }
+
+.showcase-comments-panel {
+  background: rgba(255, 250, 241, 0.9);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.6rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.showcase-comment-item p { margin: 0.1rem 0 0; font-size: 0.82rem; }
+
+.showcase-comment-delete {
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-size: 0.7rem;
+  cursor: pointer;
+  padding: 0;
+  margin-top: 0.15rem;
+  text-decoration: underline;
+}
+
+.showcase-comment-delete:hover { color: var(--accent); }
+
+.showcase-comment-form { display: flex; gap: 0.4rem; }
+
+.showcase-comment-form input {
+  flex: 1;
+  min-width: 0;
+  padding: 0.35rem 0.5rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  font-size: 0.8rem;
+}
+
+.showcase-comment-form button {
+  background: var(--accent);
+  color: #fff8f0;
+  border: none;
+  border-radius: 8px;
+  padding: 0.35rem 0.7rem;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.showcase-comment-form button:hover { background: var(--accent-hover); }
+
+.notification-comment-preview {
+  font-style: italic;
+  color: var(--muted);
+  font-size: 0.78rem;
+  margin-top: 0.15rem;
+}
+
+/* ---------- historique de valeur (graphique Statistiques, Phase 12) ---------- */
+.value-history-chart { width: 100%; height: 160px; }
+
+.value-history-area { fill: var(--accent-soft); stroke: none; }
+
+.value-history-line { fill: none; stroke: var(--accent); stroke-width: 2.5; }
+
+.value-history-labels {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.78rem;
+  color: var(--muted);
+  margin-top: 0.3rem;
+}
+
+.value-history-current { font-weight: 700; color: var(--text); font-size: 0.95rem; }
+
 .activity-feed { display: flex; flex-direction: column; gap: 0.6rem; }
 
 .activity-row {

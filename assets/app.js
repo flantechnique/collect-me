@@ -23,6 +23,7 @@ let collectionViewMode = "list"; // "list" | "pokedex"
 let currentTcgSet = null; // { set_id, game, name, releaseYear, logo, cardCount } du set actuellement affiché
 let currentTcgSetCards = []; // cartes chargées pour ce set (import en masse TCG)
 let tcgSelectedCardIds = new Set(); // tcg_id des cartes cochées pour l'import en masse
+let currentStatsEntries = []; // dernier jeu d'entrées chargé par loadStats(), réutilisé par le rapport PDF
 
 // ---------- elements ----------
 const el = {
@@ -90,6 +91,8 @@ const el = {
   statsExportCsvBtn: document.getElementById("stats-export-csv-btn"),
   statsExportJsonBtn: document.getElementById("stats-export-json-btn"),
   statsExportReimportBtn: document.getElementById("stats-export-reimport-btn"),
+  statsExportPdfBtn: document.getElementById("stats-export-pdf-btn"),
+  valueHistoryContent: document.getElementById("value-history-content"),
   collectionViewToggle: document.getElementById("collection-view-toggle"),
   viewFunBtn: document.getElementById("view-fun"),
   viewMinigamesBtn: document.getElementById("view-minigames"),
@@ -605,6 +608,30 @@ function renderNotifications() {
         <div class="notification-text">
           <span>${n.payload?.icon ?? ""} ${escapeHtml(n.payload?.title ?? "Un item")}</span> de ta wantlist est à vendre
           chez <strong>${escapeHtml(n.payload?.seller_name ?? "quelqu'un")}</strong>${n.payload?.asking_price ? ` (${n.payload.asking_price} €)` : ""}
+          <div class="notification-time">${timeAgo(n.created_at)}</div>
+        </div>
+      `;
+    } else if (n.type === "price_drop") {
+      // alerte de prix (Phase 12) : déclenchée serveur quand la meilleure valeur connue d'un
+      // item de la wantlist (moyenne communautaire, sinon estimation externe) descend au
+      // seuil défini par l'utilisateur ou en dessous — voir toggleEntryDetailsForm().
+      row.innerHTML = `
+        <img src="${n.payload?.cover_image_url ?? ""}" alt="" onerror="this.style.visibility='hidden'" />
+        <div class="notification-text">
+          <span>${n.payload?.icon ?? ""} ${escapeHtml(n.payload?.title ?? "Un item")}</span> de ta wantlist est
+          descendu à ≈ ${n.payload?.price != null ? Number(n.payload.price).toFixed(2) : "?"} €
+          <div class="notification-time">${timeAgo(n.created_at)}</div>
+        </div>
+      `;
+    } else if (n.type === "showcase_comment") {
+      // commentaire reçu sur un item de sa vitrine publique (Phase 12) — voir
+      // renderPublicShowcase() pour l'écriture des commentaires eux-mêmes.
+      row.innerHTML = `
+        <img src="${n.payload?.cover_image_url ?? ""}" alt="" onerror="this.style.visibility='hidden'" />
+        <div class="notification-text">
+          <strong>${escapeHtml(n.payload?.actor_name ?? "Quelqu'un")}</strong> a commenté
+          <span>${n.payload?.icon ?? ""} ${escapeHtml(n.payload?.title ?? "un item")}</span> sur ta vitrine
+          ${n.payload?.body ? `<div class="notification-comment-preview">« ${escapeHtml(String(n.payload.body).slice(0, 120))} »</div>` : ""}
           <div class="notification-time">${timeAgo(n.created_at)}</div>
         </div>
       `;
@@ -1699,6 +1726,9 @@ async function toggleEntryDetailsForm(card, entryId) {
     ${entry.status === "for_sale" ? `<label>Prix demandé (€)
       <input name="asking_price" type="number" step="0.01" min="0" value="${entry.asking_price ?? ""}" />
     </label>` : ""}
+    ${entry.status === "wanted" ? `<label>🔔 M'alerter si le prix moyen descend sous (€)
+      <input name="price_alert_threshold" type="number" step="0.01" min="0" placeholder="Laisser vide = pas d'alerte" value="${entry.price_alert_threshold ?? ""}" />
+    </label>` : ""}
     <label>Date d'acquisition
       <input name="acquired_at" type="date" value="${entry.acquired_at ?? ""}" />
     </label>
@@ -1755,6 +1785,7 @@ async function toggleEntryDetailsForm(card, entryId) {
         condition: fd.get("condition")?.trim() || null,
         price_paid: fd.get("price_paid") || null,
         ...(entry.status === "for_sale" ? { asking_price: fd.get("asking_price") || null } : {}),
+        ...(entry.status === "wanted" ? { price_alert_threshold: fd.get("price_alert_threshold") || null } : {}),
         acquired_at: fd.get("acquired_at") || null,
         notes: fd.get("notes")?.trim() || null,
       })
@@ -2674,15 +2705,19 @@ async function loadStats() {
     el.statsContent.innerHTML = "<p class='empty'>Connecte-toi pour voir tes statistiques.</p>";
     el.timelineContent.innerHTML = "";
     el.wrappedContent.innerHTML = "";
+    el.valueHistoryContent.innerHTML = "";
     return;
   }
   el.statsContent.innerHTML = "<p class='empty'>Chargement...</p>";
   el.timelineContent.innerHTML = "<p class='empty'>Chargement...</p>";
+  el.valueHistoryContent.innerHTML = "<p class='empty'>Chargement...</p>";
   const entries = await fetchCollectionEntries();
   await fetchItemPriceStats(entries.map((e) => e.item_id));
   renderStats(entries);
   renderTimeline(entries);
+  renderValueHistory(entries);
   el.wrappedContent.innerHTML = "";
+  currentStatsEntries = entries; // pour le rapport PDF, généré à la demande sans tout refaire
 }
 
 function renderStats(entries) {
@@ -2813,9 +2848,179 @@ function buildStatsBarSection(title, pairs) {
   return section;
 }
 
+// ---------- historique de valeur (Phase 12) ----------
+// Valeur cumulée dans le temps : classe chaque exemplaire possédé/à vendre par sa date
+// d'acquisition (repli sur la date d'ajout si non renseignée), additionne sa valeur (même
+// résolution que renderStats ci-dessus : prix payé en priorité, sinon resolvedItemValue()),
+// puis trace la somme cumulée mois par mois. Simple SVG tracé à la main (cohérent avec le
+// reste du site, aucune dépendance de charting ajoutée) — ce n'est pas un historique de cote
+// (on ne connaît la valeur d'un item qu'au moment où on la consulte), mais une vue de la
+// croissance de la valeur totale de la collection au fil des acquisitions.
+function renderValueHistory(entries) {
+  const owned = entries.filter((e) => e.status === "owned" || e.status === "for_sale");
+  const withValue = owned
+    .map((e) => {
+      let amountEUR = 0;
+      let amountUSD = 0;
+      if (e.price_paid != null) {
+        amountEUR = Number(e.price_paid);
+      } else {
+        const resolved = resolvedItemValue(e.items);
+        if (!resolved) return null;
+        if (resolved.currency === "USD") amountUSD = resolved.amount;
+        else amountEUR = resolved.amount;
+      }
+      const date = e.acquired_at || e.created_at?.slice(0, 10);
+      if (!date) return null;
+      return { date, amountEUR, amountUSD };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.date.localeCompare(b.date));
+
+  if (withValue.length < 2) {
+    el.valueHistoryContent.innerHTML =
+      "<p class='empty'>Pas encore assez d'items datés et valorisés pour tracer une évolution.</p>";
+    return;
+  }
+
+  const byMonth = new Map(); // "YYYY-MM" -> { eur, usd }
+  withValue.forEach(({ date, amountEUR, amountUSD }) => {
+    const month = date.slice(0, 7);
+    const prev = byMonth.get(month) ?? { eur: 0, usd: 0 };
+    byMonth.set(month, { eur: prev.eur + amountEUR, usd: prev.usd + amountUSD });
+  });
+  const months = [...byMonth.keys()].sort();
+  let cumulEUR = 0;
+  let cumulUSD = 0;
+  const points = months.map((month) => {
+    const { eur, usd } = byMonth.get(month);
+    cumulEUR += eur;
+    cumulUSD += usd;
+    return { month, cumulEUR, cumulUSD };
+  });
+
+  const w = 600;
+  const h = 200;
+  const padding = 28;
+  const maxVal = Math.max(...points.map((p) => p.cumulEUR), 1);
+  const xStep = (w - padding * 2) / Math.max(points.length - 1, 1);
+  const coords = points.map((p, i) => {
+    const x = padding + i * xStep;
+    const y = h - padding - (p.cumulEUR / maxVal) * (h - padding * 2);
+    return [x, y];
+  });
+  const linePath = coords.map(([x, y], i) => `${i === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`).join(" ");
+  const areaPath = `${linePath} L${coords[coords.length - 1][0].toFixed(1)},${h - padding} L${coords[0][0].toFixed(1)},${h - padding} Z`;
+
+  const lastPoint = points[points.length - 1];
+  const hasUSD = cumulUSD > 0;
+
+  el.valueHistoryContent.innerHTML = `
+    <svg viewBox="0 0 ${w} ${h}" class="value-history-chart" preserveAspectRatio="none">
+      <path d="${areaPath}" class="value-history-area"></path>
+      <path d="${linePath}" class="value-history-line"></path>
+    </svg>
+    <div class="value-history-labels">
+      <span>${points[0].month}</span>
+      <span class="value-history-current">${formatMixedCurrencyValue(lastPoint.cumulEUR, lastPoint.cumulUSD)}</span>
+      <span>${points[points.length - 1].month}</span>
+    </div>
+    ${hasUSD ? "<p class='empty'>Le tracé ne suit que la part en €uros ; le total ci-dessus inclut aussi la part en $ (devises non converties, pas d'API de change branchée).</p>" : ""}
+  `;
+}
+
+// ---------- rapport PDF de la collection (Phase 12) ----------
+// Un document imprimable listant chaque exemplaire possédé/à vendre avec sa valeur estimée
+// (même résolution que renderStats/renderValueHistory) — pensé pour un usage pratique du
+// type déclaration d'assurance, pas un export de données (voir exportCollectionCsv/Json pour
+// ça). jsPDF chargé en CDN comme les autres dépendances du site (voir index.html).
+function exportPdfReport() {
+  const entries = currentStatsEntries;
+  if (!entries.length) return alert("Charge d'abord tes statistiques (onglet Statistiques).");
+  const owned = entries.filter((e) => e.status === "owned" || e.status === "for_sale");
+  if (!owned.length) {
+    return alert("Rien à mettre dans le rapport : aucun item possédé ou à vendre pour l'instant.");
+  }
+
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ unit: "pt" });
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const marginX = 40;
+  let y = 50;
+
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(18);
+  doc.text("Rapport de collection — Glanure", marginX, y);
+  y += 22;
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(10);
+  doc.setTextColor(120);
+  doc.text(`Généré le ${new Date().toLocaleDateString("fr-FR")} · ${owned.length} exemplaire${owned.length > 1 ? "s" : ""}`, marginX, y);
+  doc.setTextColor(0);
+  y += 24;
+
+  let totalEUR = 0;
+  let totalUSD = 0;
+  let valuedCount = 0;
+  const rows = owned.map((e) => {
+    let value = null;
+    if (e.price_paid != null) {
+      value = { amount: Number(e.price_paid), currency: "EUR" };
+    } else {
+      const resolved = resolvedItemValue(e.items);
+      if (resolved) value = { amount: resolved.amount, currency: resolved.currency };
+    }
+    if (value) {
+      valuedCount++;
+      if (value.currency === "USD") totalUSD += value.amount;
+      else totalEUR += value.amount;
+    }
+    return {
+      title: e.items.title,
+      category: e.items.categories.name,
+      condition: e.condition ?? "",
+      status: e.status === "for_sale" ? "À vendre" : "Possédé",
+      value: value ? `${value.amount.toFixed(2)} ${value.currency === "USD" ? "$" : "€"}` : "—",
+    };
+  });
+
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(12);
+  doc.text(`Valeur totale estimée : ${formatMixedCurrencyValue(totalEUR, totalUSD)} (${valuedCount}/${owned.length} valorisés)`, marginX, y);
+  y += 18;
+
+  if (typeof doc.autoTable === "function") {
+    doc.autoTable({
+      startY: y,
+      margin: { left: marginX, right: marginX },
+      head: [["Item", "Catégorie", "État", "Statut", "Valeur"]],
+      body: rows.map((r) => [r.title, r.category, r.condition, r.status, r.value]),
+      styles: { fontSize: 9, cellPadding: 5 },
+      headStyles: { fillColor: [201, 106, 63] },
+    });
+  } else {
+    // repli sans plugin autoTable (pas chargé) : liste texte simple, toujours fonctionnel
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(9);
+    rows.forEach((r) => {
+      if (y > doc.internal.pageSize.getHeight() - 40) {
+        doc.addPage();
+        y = 40;
+      }
+      doc.text(`${r.title} — ${r.category} — ${r.condition || "état non précisé"} — ${r.status} — ${r.value}`, marginX, y, {
+        maxWidth: pageWidth - marginX * 2,
+      });
+      y += 16;
+    });
+  }
+
+  doc.save(`glanure-rapport-collection-${new Date().toISOString().slice(0, 10)}.pdf`);
+}
+
 // ---------- export de la collection (sauvegarde/analyse externe) ----------
 el.statsExportCsvBtn.addEventListener("click", exportCollectionCsv);
 el.statsExportJsonBtn.addEventListener("click", exportCollectionJson);
+el.statsExportPdfBtn.addEventListener("click", exportPdfReport);
 el.statsExportReimportBtn.addEventListener("click", exportReimportableCsv);
 
 function triggerDownload(content, filename, mime) {
@@ -3850,9 +4055,45 @@ async function renderPublicShowcase({ userId, username }) {
   const uniqueItems = [...new Map(items.map((i) => [i.item_id, i])).values()]
     .sort((a, b) => a.title.localeCompare(b.title));
 
+  // ---- interactions sociales (Phase 12) : j'aime + commentaires par item exposé, chargés en
+  // une seule fois pour toute la grille plutôt qu'une requête par carte ----
+  const [{ data: reactions }, { data: comments }] = await Promise.all([
+    sb.from("showcase_reactions").select("id, item_id, actor_id").eq("owner_id", userId),
+    sb.from("showcase_comments").select("id, item_id, actor_id, body, created_at").eq("owner_id", userId).order("created_at", { ascending: true }),
+  ]);
+
+  const reactionsByItem = new Map(); // item_id -> { count, myReactionId }
+  (reactions ?? []).forEach((r) => {
+    const bucket = reactionsByItem.get(r.item_id) ?? { count: 0, myReactionId: null };
+    bucket.count++;
+    if (currentUser && r.actor_id === currentUser.id) bucket.myReactionId = r.id;
+    reactionsByItem.set(r.item_id, bucket);
+  });
+
+  // player_identities (déjà utilisée pour les classements mini-jeux) donne un nom d'affichage
+  // même pour un commentateur dont la vitrine à lui n'est pas publique
+  const commentActorIds = [...new Set((comments ?? []).map((c) => c.actor_id))];
+  const actorNames = new Map();
+  if (commentActorIds.length) {
+    const { data: identities } = await sb
+      .from("player_identities")
+      .select("id, username, display_name")
+      .in("id", commentActorIds);
+    (identities ?? []).forEach((p) => actorNames.set(p.id, p.username || p.display_name || "Quelqu'un"));
+  }
+  const commentsByItem = new Map(); // item_id -> [{ id, actor_id, actor_name, body, created_at }]
+  (comments ?? []).forEach((c) => {
+    const list = commentsByItem.get(c.item_id) ?? [];
+    list.push({ ...c, actor_name: actorNames.get(c.actor_id) ?? "Quelqu'un" });
+    commentsByItem.set(c.item_id, list);
+  });
+
   const grid = document.createElement("div");
   grid.className = "pokedex-grid";
   uniqueItems.forEach((item) => {
+    const wrap = document.createElement("div");
+    wrap.className = "pokedex-card-wrap";
+
     const card = document.createElement("a");
     card.href = `?item=${item.item_id}`;
     card.target = "_blank";
@@ -3862,10 +4103,133 @@ async function renderPublicShowcase({ userId, username }) {
       <img src="${item.cover_image_url ?? ""}" alt="" onerror="this.style.visibility='hidden'" />
       <div class="pokedex-title">${item.category_icon ?? ""} ${escapeHtml(item.title)}</div>
     `;
-    grid.appendChild(card);
+    wrap.appendChild(card);
+    wrap.appendChild(
+      buildShowcaseReactionBar({
+        ownerId: userId,
+        itemId: item.item_id,
+        reactions: reactionsByItem.get(item.item_id) ?? { count: 0, myReactionId: null },
+        comments: commentsByItem.get(item.item_id) ?? [],
+      })
+    );
+    grid.appendChild(wrap);
   });
   el.showcaseContent.innerHTML = "";
   el.showcaseContent.appendChild(grid);
+}
+
+// Construit la barre "❤️ N · 💬 N" + le panneau de commentaires dépliable d'un item de
+// vitrine. Élément à part de la carte `<a>` (pas imbriqué dedans) pour ne jamais interférer
+// avec le clic qui ouvre l'item dans un nouvel onglet.
+function buildShowcaseReactionBar({ ownerId, itemId, reactions, comments }) {
+  const container = document.createElement("div");
+  container.className = "showcase-reaction-container";
+
+  const bar = document.createElement("div");
+  bar.className = "showcase-reactions";
+
+  const likeBtn = document.createElement("button");
+  likeBtn.type = "button";
+  likeBtn.className = "showcase-like-btn";
+  const setLikeLabel = () => {
+    likeBtn.textContent = `${reactions.myReactionId ? "❤️" : "🤍"} ${reactions.count}`;
+    likeBtn.classList.toggle("liked", Boolean(reactions.myReactionId));
+  };
+  setLikeLabel();
+  likeBtn.addEventListener("click", async () => {
+    if (!currentUser) return alert("Connecte-toi pour aimer un item.");
+    likeBtn.disabled = true;
+    if (reactions.myReactionId) {
+      const { error } = await sb.from("showcase_reactions").delete().eq("id", reactions.myReactionId);
+      if (!error) {
+        reactions.myReactionId = null;
+        reactions.count--;
+      }
+    } else {
+      const { data, error } = await sb
+        .from("showcase_reactions")
+        .insert({ owner_id: ownerId, item_id: itemId, actor_id: currentUser.id })
+        .select()
+        .single();
+      if (!error) {
+        reactions.myReactionId = data.id;
+        reactions.count++;
+      }
+    }
+    setLikeLabel();
+    likeBtn.disabled = false;
+  });
+
+  const commentBtn = document.createElement("button");
+  commentBtn.type = "button";
+  commentBtn.className = "showcase-comment-toggle";
+  commentBtn.textContent = `💬 ${comments.length}`;
+
+  const panel = document.createElement("div");
+  panel.className = "showcase-comments-panel";
+  panel.hidden = true;
+
+  function renderPanel() {
+    panel.innerHTML = "";
+    if (!comments.length) {
+      panel.innerHTML = "<p class='empty'>Aucun commentaire pour l'instant.</p>";
+    }
+    comments.forEach((c) => {
+      const row = document.createElement("div");
+      row.className = "showcase-comment-item";
+      row.innerHTML = `
+        <div><strong>${escapeHtml(c.actor_name)}</strong> <span class="notification-time">${timeAgo(c.created_at)}</span></div>
+        <p>${escapeHtml(c.body)}</p>
+      `;
+      if (currentUser && (c.actor_id === currentUser.id || ownerId === currentUser.id)) {
+        const del = document.createElement("button");
+        del.type = "button";
+        del.className = "showcase-comment-delete";
+        del.textContent = "Supprimer";
+        del.addEventListener("click", async () => {
+          await sb.from("showcase_comments").delete().eq("id", c.id);
+          const idx = comments.indexOf(c);
+          if (idx >= 0) comments.splice(idx, 1);
+          commentBtn.textContent = `💬 ${comments.length}`;
+          renderPanel();
+        });
+        row.appendChild(del);
+      }
+      panel.appendChild(row);
+    });
+    if (currentUser) {
+      const form = document.createElement("form");
+      form.className = "showcase-comment-form";
+      form.innerHTML = `<input type="text" maxlength="500" placeholder="Ajouter un commentaire..." autocomplete="off" /><button type="submit">Envoyer</button>`;
+      form.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const input = form.querySelector("input");
+        const body = input.value.trim();
+        if (!body) return;
+        const { data, error } = await sb
+          .from("showcase_comments")
+          .insert({ owner_id: ownerId, item_id: itemId, actor_id: currentUser.id, body })
+          .select()
+          .single();
+        if (error) return alert(error.message);
+        comments.push({ ...data, actor_name: "Toi" });
+        commentBtn.textContent = `💬 ${comments.length}`;
+        renderPanel();
+      });
+      panel.appendChild(form);
+    } else {
+      panel.insertAdjacentHTML("beforeend", "<p class='empty'>Connecte-toi pour commenter.</p>");
+    }
+  }
+  renderPanel();
+
+  commentBtn.addEventListener("click", () => {
+    panel.hidden = !panel.hidden;
+  });
+
+  bar.append(likeBtn, commentBtn);
+  container.append(bar, panel);
+  return container;
 }
 
 const SOCIAL_ICONS = { x: "𝕏", facebook: "📘", reddit: "👽", instagram: "📸", steam: "🎮" };
