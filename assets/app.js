@@ -14,6 +14,42 @@ if ("serviceWorker" in navigator && !window.Capacitor?.isNativePlatform?.()) {
   });
 }
 
+// ---------- thème clair/sombre ----------
+// 3 états cycliques : "système" (pas de préférence enregistrée, suit prefers-color-scheme),
+// "light", "dark" — persisté en localStorage (préférence par appareil/navigateur, pas de
+// compte nécessaire). Le <head> applique déjà le choix enregistré avant le premier rendu
+// (voir le petit script anti-flash dans index.html) ; ce bloc ne gère que le bouton et le cycle.
+const THEME_ICONS = { system: "🌓", light: "☀️", dark: "🌙" };
+const THEME_LABELS = { system: "Thème : Système (auto)", light: "Thème : Clair", dark: "Thème : Sombre" };
+function currentThemeChoice() {
+  try {
+    const t = localStorage.getItem("glanure-theme");
+    return t === "dark" || t === "light" ? t : "system";
+  } catch (e) {
+    return "system";
+  }
+}
+function applyThemeChoice(choice) {
+  if (choice === "system") delete document.documentElement.dataset.theme;
+  else document.documentElement.dataset.theme = choice;
+  el.themeToggleBtn.textContent = THEME_ICONS[choice];
+  el.themeToggleBtn.title = THEME_LABELS[choice];
+  el.themeToggleBtn.setAttribute("aria-label", THEME_LABELS[choice]);
+}
+applyThemeChoice(currentThemeChoice());
+el.themeToggleBtn.addEventListener("click", () => {
+  const order = ["system", "light", "dark"];
+  const next = order[(order.indexOf(currentThemeChoice()) + 1) % order.length];
+  try {
+    if (next === "system") localStorage.removeItem("glanure-theme");
+    else localStorage.setItem("glanure-theme", next);
+  } catch (e) {
+    // localStorage indisponible (navigation privée...) : le thème s'applique quand même
+    // pour la session en cours, simplement non mémorisé pour la prochaine visite
+  }
+  applyThemeChoice(next);
+});
+
 // ---------- state ----------
 let currentUser = null;
 let categories = [];
@@ -23,6 +59,7 @@ let catalogueSearchQuery = "";
 let catalogueSortKey = "recent";
 let collectionSearchQuery = "";
 let collectionViewMode = "list"; // "list" | "pokedex"
+let showLoanedOnly = false;
 let currentTcgSet = null; // { set_id, game, name, releaseYear, logo, cardCount } du set actuellement affiché
 let currentTcgSetCards = []; // cartes chargées pour ce set (import en masse TCG)
 let tcgSelectedCardIds = new Set(); // tcg_id des cartes cochées pour l'import en masse
@@ -30,6 +67,7 @@ let currentStatsEntries = []; // dernier jeu d'entrées chargé par loadStats(),
 
 // ---------- elements ----------
 const el = {
+  themeToggleBtn: document.getElementById("theme-toggle-btn"),
   authArea: document.getElementById("auth-area"),
   viewHomeBtn: document.getElementById("view-home"),
   viewCollectionBtn: document.getElementById("view-collection"),
@@ -97,6 +135,8 @@ const el = {
   statsExportPdfBtn: document.getElementById("stats-export-pdf-btn"),
   valueHistoryContent: document.getElementById("value-history-content"),
   collectionViewToggle: document.getElementById("collection-view-toggle"),
+  collectionLoanedFilterBtn: document.getElementById("collection-loaned-filter-btn"),
+  tcgSetProgress: document.getElementById("tcg-set-progress"),
   viewFunBtn: document.getElementById("view-fun"),
   viewMinigamesBtn: document.getElementById("view-minigames"),
   minigamesView: document.getElementById("minigames-view"),
@@ -152,6 +192,9 @@ const el = {
   showcaseContent: document.getElementById("showcase-content"),
   showcaseForsaleSection: document.getElementById("showcase-forsale-section"),
   showcaseForsaleContent: document.getElementById("showcase-forsale-content"),
+  showcaseWishlistSection: document.getElementById("showcase-wishlist-section"),
+  showcaseWishlistOwnNote: document.getElementById("showcase-wishlist-own-note"),
+  showcaseWishlistContent: document.getElementById("showcase-wishlist-content"),
   showcaseActivitySection: document.getElementById("showcase-activity-section"),
   showcaseActivityContent: document.getElementById("showcase-activity-content"),
   collectionPrintLabelsBtn: document.getElementById("collection-print-labels-btn"),
@@ -319,6 +362,7 @@ const CATEGORY_RESULT_MAPPERS = {
     attributes: {
       ...(r.game && { game: r.game }),
       ...(r.set_name && { set_name: r.set_name }),
+      ...(r.set_id && { set_id: r.set_id }),
       ...(r.card_number && { card_number: r.card_number }),
       ...(r.rarity && { rarity: r.rarity }),
       ...(r.year && { year: r.year }),
@@ -1593,6 +1637,13 @@ async function loadMyCollection() {
 
   const filterSlug = el.collectionFilter.value;
   let rows = filterSlug ? data.filter((r) => r.items.categories.slug === filterSlug) : data;
+
+  if (filterSlug === "tcg") {
+    renderTcgSetProgress(rows);
+  } else {
+    el.tcgSetProgress.hidden = true;
+  }
+
   if (collectionSearchQuery) {
     rows = rows.filter((r) => {
       const q = collectionSearchQuery;
@@ -1621,10 +1672,25 @@ async function loadMyCollection() {
   rows.forEach((entry) => {
     const key = `${entry.item_id}:${entry.status}`;
     if (!groups.has(key)) {
-      groups.set(key, { item: entry.items, status: entry.status, entryIds: [] });
+      groups.set(key, { item: entry.items, status: entry.status, entryIds: [], loans: [] });
     }
-    groups.get(key).entryIds.push(entry.id);
+    const group = groups.get(key);
+    group.entryIds.push(entry.id);
+    if (entry.loaned_to) group.loans.push(entry.loaned_to);
   });
+
+  if (showLoanedOnly) {
+    [...groups.keys()].forEach((key) => {
+      if (!groups.get(key).loans.length) groups.delete(key);
+    });
+    if (!groups.size) {
+      el.collectionList.innerHTML = "<p class='empty'>Aucun exemplaire prêté en ce moment.</p>";
+      lastRenderedGroups = new Map();
+      bulkSelection.clear();
+      el.collectionBulkBar.hidden = true;
+      return;
+    }
+  }
   lastRenderedGroups = groups;
   // on ne garde en sélection que les clés encore présentes (ex: après un changement de filtre)
   bulkSelection = new Set([...bulkSelection].filter((k) => groups.has(k)));
@@ -1681,9 +1747,11 @@ function renderCollectionPokedex(groups) {
 }
 
 function renderCollectionGroup(group) {
-  const { item, status, entryIds } = group;
+  const { item, status, entryIds, loans } = group;
   const key = `${item.id}:${status}`;
   const value = estimatedValueLabel(item);
+  const loanLabel = !loans?.length ? "" :
+    loans.length === 1 ? `🤝 Prêté à ${escapeHtml(loans[0])}` : `🤝 ${loans.length} exemplaires prêtés`;
   const card = document.createElement("div");
   card.className = "card";
   card.innerHTML = `
@@ -1695,6 +1763,7 @@ function renderCollectionGroup(group) {
         <p class="status status-${status}">${statusLabel(status)}</p>
         <p class="collection-qty">${entryIds.length} exemplaire${entryIds.length > 1 ? "s" : ""}</p>
         ${value ? `<p class="estimated-value">💰 Valeur estimée : ${escapeHtml(value)}</p>` : ""}
+        ${loanLabel ? `<p class="loan-badge">${loanLabel}</p>` : ""}
       </div>
     </div>
   `;
@@ -1837,10 +1906,20 @@ async function toggleEntryDetailsForm(card, entryId) {
     </label>` : ""}
     ${entry.status === "wanted" ? `<label>🔔 M'alerter si le prix moyen descend sous (€)
       <input name="price_alert_threshold" type="number" step="0.01" min="0" placeholder="Laisser vide = pas d'alerte" value="${entry.price_alert_threshold ?? ""}" />
+    </label>
+    <label class="full-width showcase-toggle">
+      <input type="checkbox" name="wishlist_public" ${entry.wishlist_public ? "checked" : ""} />
+      🎁 Afficher sur ma liste de souhaits publique (idées cadeaux) — nécessite la vitrine publique activée dans Paramètres
     </label>` : ""}
     <label>Date d'acquisition
       <input name="acquired_at" type="date" value="${entry.acquired_at ?? ""}" />
     </label>
+    ${entry.status !== "wanted" ? `<label>🤝 Prêté à
+      <input name="loaned_to" placeholder="Laisser vide = pas prêté" value="${escapeHtml(entry.loaned_to ?? "")}" />
+    </label>
+    <label>Depuis le
+      <input name="loaned_at" type="date" value="${entry.loaned_at ?? ""}" />
+    </label>` : ""}
     <label class="full-width">Notes
       <textarea name="notes">${escapeHtml(entry.notes ?? "")}</textarea>
     </label>
@@ -1888,18 +1967,29 @@ async function toggleEntryDetailsForm(card, entryId) {
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
     const fd = new FormData(form);
+    const loanedTo = entry.status !== "wanted" ? fd.get("loaned_to")?.trim() || null : entry.loaned_to;
     const { error: updateError } = await sb
       .from("collection_entries")
       .update({
         condition: fd.get("condition")?.trim() || null,
         price_paid: fd.get("price_paid") || null,
         ...(entry.status === "for_sale" ? { asking_price: fd.get("asking_price") || null } : {}),
-        ...(entry.status === "wanted" ? { price_alert_threshold: fd.get("price_alert_threshold") || null } : {}),
+        ...(entry.status === "wanted" ? {
+          price_alert_threshold: fd.get("price_alert_threshold") || null,
+          wishlist_public: fd.get("wishlist_public") === "on",
+        } : {}),
         acquired_at: fd.get("acquired_at") || null,
         notes: fd.get("notes")?.trim() || null,
+        ...(entry.status !== "wanted" ? {
+          loaned_to: loanedTo,
+          // pas de destinataire = prêt terminé (ou jamais démarré) → on efface aussi la date ;
+          // sinon on garde la date choisie, ou celle du jour si elle n'a pas été renseignée
+          loaned_at: loanedTo ? (fd.get("loaned_at") || new Date().toISOString().slice(0, 10)) : null,
+        } : {}),
       })
       .eq("id", entryId);
     if (updateError) return alert(updateError.message);
+    loadMyCollection();
     form.remove();
   });
 
@@ -1952,6 +2042,11 @@ el.collectionViewToggle.addEventListener("click", () => {
   collectionViewMode = collectionViewMode === "pokedex" ? "list" : "pokedex";
   el.collectionViewToggle.classList.toggle("active", collectionViewMode === "pokedex");
   el.collectionViewToggle.textContent = collectionViewMode === "pokedex" ? "📋 Vue liste" : "🎴 Vue Pokédex";
+  loadMyCollection();
+});
+el.collectionLoanedFilterBtn.addEventListener("click", () => {
+  showLoanedOnly = !showLoanedOnly;
+  el.collectionLoanedFilterBtn.classList.toggle("active", showLoanedOnly);
   loadMyCollection();
 });
 
@@ -2320,6 +2415,130 @@ function renderTcgSetResults(sets) {
   });
 }
 
+// ---------- progression de mes sets TCG (Phase 15) ----------
+// Regroupe les cartes possédées/à vendre par set (attributes.set_id, renseigné depuis la
+// Phase "TCG en masse" + rétro-ajouté à l'ajout carte-par-carte), interroge tcg-search en
+// mode "set_cards" pour connaître le total de cartes de chaque set, et affiche une barre de
+// progression + les cartes manquantes (avec ajout direct en wantlist).
+const tcgSetProgressCache = new Map(); // set_id -> cards[] du set entier (session en cours)
+
+async function fetchTcgSetCards(setId) {
+  if (tcgSetProgressCache.has(setId)) return tcgSetProgressCache.get(setId);
+  const { data: { session } } = await sb.auth.getSession();
+  const res = await fetch(
+    `${SUPABASE_URL}/functions/v1/tcg-search?set_cards=${encodeURIComponent(setId)}`,
+    { headers: { Authorization: `Bearer ${session.access_token}` } }
+  );
+  if (!res.ok) return null;
+  const payload = await res.json();
+  const cards = payload.cards ?? [];
+  if (cards.length) tcgSetProgressCache.set(setId, cards); // pas de cache si vide (probable raté réseau, on retentera)
+  return cards;
+}
+
+async function renderTcgSetProgress(tcgRows) {
+  const bySet = new Map(); // set_id -> { setName, game, ownedTcgIds: Set }
+  tcgRows
+    .filter((r) => (r.status === "owned" || r.status === "for_sale") && r.items.attributes?.set_id)
+    .forEach((r) => {
+      const setId = r.items.attributes.set_id;
+      if (!bySet.has(setId)) {
+        bySet.set(setId, { setName: r.items.attributes.set_name ?? setId, game: r.items.attributes.game ?? "", ownedTcgIds: new Set() });
+      }
+      bySet.get(setId).ownedTcgIds.add(r.items.external_ids?.tcg_id);
+    });
+
+  if (!bySet.size) {
+    el.tcgSetProgress.hidden = true;
+    el.tcgSetProgress.innerHTML = "";
+    return;
+  }
+
+  el.tcgSetProgress.hidden = false;
+  el.tcgSetProgress.innerHTML = `<h3>📊 Progression de mes sets</h3><div class="tcg-set-progress-list"></div>`;
+  const list = el.tcgSetProgress.querySelector(".tcg-set-progress-list");
+
+  const entries = [...bySet.entries()];
+  entries.forEach(([setId, info]) => {
+    const card = document.createElement("div");
+    card.className = "tcg-set-progress-card";
+    card.innerHTML = `
+      <div class="tcg-set-progress-header">
+        <strong>${escapeHtml(info.setName)}</strong>
+        <span class="empty">${escapeHtml(info.game)}</span>
+      </div>
+      <p class="empty tcg-set-progress-status">Calcul en cours...</p>
+    `;
+    list.appendChild(card);
+
+    fetchTcgSetCards(setId).then((allCards) => {
+      if (!allCards || !allCards.length) {
+        card.querySelector(".tcg-set-progress-status").textContent =
+          "Impossible de récupérer les cartes de ce set pour le moment (API externe indisponible) — réessaie plus tard.";
+        return;
+      }
+      const owned = allCards.filter((c) => info.ownedTcgIds.has(c.tcg_id));
+      const missing = allCards.filter((c) => !info.ownedTcgIds.has(c.tcg_id));
+      const pct = Math.round((owned.length / allCards.length) * 100);
+
+      const statusEl = card.querySelector(".tcg-set-progress-status");
+      statusEl.remove();
+      card.insertAdjacentHTML("beforeend", `
+        <div class="tcg-set-progress-bar"><div class="tcg-set-progress-bar-fill" style="width:${pct}%"></div></div>
+        <p class="empty">${owned.length}/${allCards.length} cartes (${pct}%)</p>
+        ${missing.length ? `
+          <button type="button" class="link-btn tcg-set-progress-toggle">Voir les ${missing.length} carte${missing.length > 1 ? "s" : ""} manquante${missing.length > 1 ? "s" : ""}</button>
+          <div class="tcg-set-progress-missing" hidden></div>
+        ` : "<p class='empty'>✅ Set complet !</p>"}
+      `);
+
+      if (!missing.length) return;
+      const toggleBtn = card.querySelector(".tcg-set-progress-toggle");
+      const missingEl = card.querySelector(".tcg-set-progress-missing");
+      toggleBtn.addEventListener("click", () => {
+        if (!missingEl.hidden) {
+          missingEl.hidden = true;
+          return;
+        }
+        missingEl.hidden = false;
+        if (missingEl.dataset.built) return;
+        missingEl.dataset.built = "1";
+        missingEl.innerHTML = `
+          <div class="tcg-set-progress-missing-grid">
+            ${missing.map((c) => `
+              <div class="tcg-set-progress-missing-card">
+                <img src="${c.cover_image ?? ""}" alt="" onerror="this.style.visibility='hidden'" />
+                <span>${escapeHtml(c.title)}${c.card_number ? ` #${escapeHtml(c.card_number)}` : ""}</span>
+              </div>
+            `).join("")}
+          </div>
+          <button type="button" class="tcg-set-progress-add-btn">🔔 Ajouter les ${missing.length} manquante${missing.length > 1 ? "s" : ""} en recherché</button>
+        `;
+        const addBtn = missingEl.querySelector(".tcg-set-progress-add-btn");
+        addBtn.addEventListener("click", async () => {
+          if (!currentUser) return alert("Connecte-toi pour ajouter des cartes.");
+          const categoryId = tcgRows[0]?.items.categories.id;
+          const originalText = addBtn.textContent;
+          addBtn.disabled = true;
+          addBtn.textContent = "Ajout en cours...";
+          try {
+            const { added, skipped } = await importTcgCardsAsStatus(missing, "wanted", categoryId);
+            alert(
+              `${added} carte${added > 1 ? "s" : ""} ajoutée${added > 1 ? "s" : ""} en recherché` +
+              (skipped ? ` (${skipped} déjà présente${skipped > 1 ? "s" : ""}).` : ".")
+            );
+            loadMyCollection();
+          } catch (err) {
+            alert(err.message);
+            addBtn.disabled = false;
+            addBtn.textContent = originalText;
+          }
+        });
+      });
+    });
+  });
+}
+
 async function loadTcgSetCards(set) {
   el.tcgSetSearchResults.hidden = true;
   el.tcgSetSearchInput.value = set.name;
@@ -2435,6 +2654,79 @@ function renderTcgSetCards() {
   });
 }
 
+// Cœur partagé de l'import en masse de cartes TCG (utilisé par le panneau "importer un set
+// complet" ET par "Progression de mes sets" → "ajouter les cartes manquantes en recherché") :
+// retrouve/crée les items catalogue pour ces cartes puis ajoute une entrée de collection au
+// statut demandé, sans dupliquer si l'utilisateur relance le même import (ex. set complété en
+// plusieurs fois, ou carte déjà en wantlist).
+async function importTcgCardsAsStatus(cards, status, categoryId) {
+  const tcgIds = cards.map((c) => c.tcg_id);
+
+  // 1. items déjà présents dans le catalogue pour ces cartes (identifiés par tcg_id)
+  const { data: existingItems, error: existingErr } = await sb
+    .from("items")
+    .select("id, external_ids")
+    .eq("category_id", categoryId)
+    .in("external_ids->>tcg_id", tcgIds);
+  if (existingErr) throw existingErr;
+
+  const itemIdByTcgId = new Map();
+  (existingItems ?? []).forEach((it) => itemIdByTcgId.set(it.external_ids?.tcg_id, it.id));
+
+  // 2. crée en une seule requête groupée les items qui n'existent pas encore
+  const missingCards = cards.filter((c) => !itemIdByTcgId.has(c.tcg_id));
+  if (missingCards.length) {
+    const rows = missingCards.map((c) => ({
+      category_id: categoryId,
+      title: c.title,
+      cover_image_url: c.cover_image ?? null,
+      external_ids: { tcg_id: c.tcg_id },
+      attributes: {
+        ...(c.game && { game: c.game }),
+        ...(c.set_name && { set_name: c.set_name }),
+        ...(c.set_id && { set_id: c.set_id }),
+        ...(c.card_number && { card_number: c.card_number }),
+        ...(c.rarity && { rarity: c.rarity }),
+        ...(c.year && { year: c.year }),
+        // "prix neuf" automatique (Phase 11 point 4), même source que l'ajout carte-par-carte
+        ...(c.estimated_value_amount != null && {
+          estimated_value_amount: c.estimated_value_amount,
+          estimated_value_currency: c.estimated_value_currency,
+        }),
+      },
+      source: "external_api",
+      created_by: currentUser.id,
+    }));
+    const { data: created, error: insertErr } = await sb
+      .from("items")
+      .insert(rows)
+      .select("id, external_ids");
+    if (insertErr) throw insertErr;
+    (created ?? []).forEach((it) => itemIdByTcgId.set(it.external_ids?.tcg_id, it.id));
+  }
+
+  const allItemIds = [...itemIdByTcgId.values()];
+
+  // 3. on n'ajoute pas de doublon dans la collection si la carte y est déjà (permet de relancer
+  // le même import sans re-créer des entrées, ex. après avoir complété le set en plusieurs fois)
+  const { data: existingEntries, error: entriesErr } = await sb
+    .from("collection_entries")
+    .select("item_id")
+    .eq("user_id", currentUser.id)
+    .in("item_id", allItemIds);
+  if (entriesErr) throw entriesErr;
+  const alreadyOwned = new Set((existingEntries ?? []).map((e) => e.item_id));
+
+  const newEntryItemIds = allItemIds.filter((id) => !alreadyOwned.has(id));
+  if (newEntryItemIds.length) {
+    const entryRows = newEntryItemIds.map((itemId) => ({ item_id: itemId, status, user_id: currentUser.id }));
+    const { error: entryInsertErr } = await sb.from("collection_entries").insert(entryRows);
+    if (entryInsertErr) throw entryInsertErr;
+  }
+
+  return { added: newEntryItemIds.length, skipped: allItemIds.length - newEntryItemIds.length };
+}
+
 async function bulkImportTcgCards(status, triggerBtn) {
   if (!currentUser) {
     alert("Connecte-toi pour ajouter des cartes.");
@@ -2449,71 +2741,7 @@ async function bulkImportTcgCards(status, triggerBtn) {
   triggerBtn.textContent = "Import en cours...";
 
   try {
-    const tcgIds = cardsToImport.map((c) => c.tcg_id);
-
-    // 1. items déjà présents dans le catalogue pour ces cartes (identifiés par tcg_id)
-    const { data: existingItems, error: existingErr } = await sb
-      .from("items")
-      .select("id, external_ids")
-      .eq("category_id", cat.id)
-      .in("external_ids->>tcg_id", tcgIds);
-    if (existingErr) throw existingErr;
-
-    const itemIdByTcgId = new Map();
-    (existingItems ?? []).forEach((it) => itemIdByTcgId.set(it.external_ids?.tcg_id, it.id));
-
-    // 2. crée en une seule requête groupée les items qui n'existent pas encore
-    const missingCards = cardsToImport.filter((c) => !itemIdByTcgId.has(c.tcg_id));
-    if (missingCards.length) {
-      const rows = missingCards.map((c) => ({
-        category_id: cat.id,
-        title: c.title,
-        cover_image_url: c.cover_image ?? null,
-        external_ids: { tcg_id: c.tcg_id },
-        attributes: {
-          ...(c.game && { game: c.game }),
-          ...(c.set_name && { set_name: c.set_name }),
-          ...(c.card_number && { card_number: c.card_number }),
-          ...(c.rarity && { rarity: c.rarity }),
-          ...(c.year && { year: c.year }),
-          // "prix neuf" automatique (Phase 11 point 4), même source que l'ajout carte-par-carte
-          ...(c.estimated_value_amount != null && {
-            estimated_value_amount: c.estimated_value_amount,
-            estimated_value_currency: c.estimated_value_currency,
-          }),
-        },
-        source: "external_api",
-        created_by: currentUser.id,
-      }));
-      const { data: created, error: insertErr } = await sb
-        .from("items")
-        .insert(rows)
-        .select("id, external_ids");
-      if (insertErr) throw insertErr;
-      (created ?? []).forEach((it) => itemIdByTcgId.set(it.external_ids?.tcg_id, it.id));
-    }
-
-    const allItemIds = [...itemIdByTcgId.values()];
-
-    // 3. on n'ajoute pas de doublon dans la collection si la carte y est déjà (permet de relancer
-    // le même import sans re-créer des entrées, ex. après avoir complété le set en plusieurs fois)
-    const { data: existingEntries, error: entriesErr } = await sb
-      .from("collection_entries")
-      .select("item_id")
-      .eq("user_id", currentUser.id)
-      .in("item_id", allItemIds);
-    if (entriesErr) throw entriesErr;
-    const alreadyOwned = new Set((existingEntries ?? []).map((e) => e.item_id));
-
-    const newEntryItemIds = allItemIds.filter((id) => !alreadyOwned.has(id));
-    if (newEntryItemIds.length) {
-      const entryRows = newEntryItemIds.map((itemId) => ({ item_id: itemId, status, user_id: currentUser.id }));
-      const { error: entryInsertErr } = await sb.from("collection_entries").insert(entryRows);
-      if (entryInsertErr) throw entryInsertErr;
-    }
-
-    const skipped = allItemIds.length - newEntryItemIds.length;
-    const added = newEntryItemIds.length;
+    const { added, skipped } = await importTcgCardsAsStatus(cardsToImport, status, cat.id);
     alert(
       `${added} carte${added > 1 ? "s" : ""} ajoutée${added > 1 ? "s" : ""} à ta collection` +
       (skipped ? ` (${skipped} déjà présente${skipped > 1 ? "s" : ""}, ignorée${skipped > 1 ? "s" : ""}).` : ".")
@@ -4051,6 +4279,95 @@ el.accountDeleteForm.addEventListener("submit", async (e) => {
 
 // ---- rendu de la vitrine publique pour un visiteur (pas besoin d'être connecté) ----
 // accepte soit un user_id (lien historique ?showcase=), soit un pseudo (nouveau lien ?u=)
+// ---------- liste de souhaits publique ("idées cadeaux", Phase 15) ----------
+// Distincte de la wantlist privée : seuls les items que le propriétaire a explicitement
+// cochés (case "wishlist_public" du formulaire Détails) apparaissent ici. Les réservations
+// ("je m'en occupe") sont invisibles pour le propriétaire par construction (RLS), pour
+// préserver la surprise — voir la migration public_wishlist_gift_registry.
+async function renderShowcaseWishlist(items, ownerUserId) {
+  if (!items.length) {
+    el.showcaseWishlistSection.hidden = true;
+    return;
+  }
+  el.showcaseWishlistSection.hidden = false;
+
+  const isOwnProfile = currentUser?.id === ownerUserId;
+  el.showcaseWishlistOwnNote.hidden = !isOwnProfile;
+
+  let reservationByItem = new Map(); // item_id -> reserved_by
+  if (!isOwnProfile) {
+    const { data: reservations } = await sb
+      .from("wishlist_reservations")
+      .select("item_id, reserved_by")
+      .eq("owner_user_id", ownerUserId)
+      .in("item_id", items.map((i) => i.item_id));
+    (reservations ?? []).forEach((r) => reservationByItem.set(r.item_id, r.reserved_by));
+  }
+
+  const grid = document.createElement("div");
+  grid.className = "pokedex-grid";
+  items.forEach((item) => {
+    const card = document.createElement("div");
+    card.className = "pokedex-card wishlist-gift-card";
+    card.innerHTML = `
+      <a href="?item=${item.item_id}" target="_blank" rel="noopener">
+        <img src="${item.cover_image_url ?? ""}" alt="" onerror="this.style.visibility='hidden'" />
+        <div class="pokedex-title">${item.category_icon ?? ""} ${escapeHtml(item.title)}</div>
+      </a>
+      <div class="wishlist-gift-action"></div>
+    `;
+    if (!isOwnProfile) {
+      renderWishlistAction(card.querySelector(".wishlist-gift-action"), item.item_id, ownerUserId, reservationByItem.get(item.item_id));
+    }
+    grid.appendChild(card);
+  });
+  el.showcaseWishlistContent.innerHTML = "";
+  el.showcaseWishlistContent.appendChild(grid);
+}
+
+// (Re)dessine le bouton d'action d'une carte "idée cadeau" selon l'état de réservation, et
+// rebranche lui-même l'écouteur adapté — appelée à l'affichage initial et après chaque
+// réservation/annulation pour rafraîchir la carte sans recharger toute la vitrine.
+function renderWishlistAction(actionEl, itemId, ownerUserId, reservedBy) {
+  if (!reservedBy) {
+    actionEl.innerHTML = `<button type="button" class="wishlist-reserve-btn">🎁 Je m'en occupe</button>`;
+    actionEl.querySelector("button").addEventListener("click", async (e) => {
+      if (!currentUser) return alert("Connecte-toi pour réserver un cadeau.");
+      const btn = e.currentTarget;
+      btn.disabled = true;
+      const { error } = await sb
+        .from("wishlist_reservations")
+        .insert({ item_id: itemId, owner_user_id: ownerUserId, reserved_by: currentUser.id });
+      if (error) {
+        alert(error.message);
+        btn.disabled = false;
+        return;
+      }
+      renderWishlistAction(actionEl, itemId, ownerUserId, currentUser.id);
+    });
+  } else if (currentUser && reservedBy === currentUser.id) {
+    actionEl.innerHTML = `<button type="button" class="wishlist-unreserve-btn">✅ Réservé par toi (annuler)</button>`;
+    actionEl.querySelector("button").addEventListener("click", async (e) => {
+      const btn = e.currentTarget;
+      btn.disabled = true;
+      const { error } = await sb
+        .from("wishlist_reservations")
+        .delete()
+        .eq("item_id", itemId)
+        .eq("owner_user_id", ownerUserId)
+        .eq("reserved_by", currentUser.id);
+      if (error) {
+        alert(error.message);
+        btn.disabled = false;
+        return;
+      }
+      renderWishlistAction(actionEl, itemId, ownerUserId, null);
+    });
+  } else {
+    actionEl.innerHTML = `<p class="empty">🙈 Déjà réservé</p>`;
+  }
+}
+
 async function renderPublicShowcase({ userId, username }) {
   document.querySelector("header").hidden = true;
   document.querySelector("nav.main-nav").hidden = true;
@@ -4103,9 +4420,10 @@ async function renderPublicShowcase({ userId, username }) {
   renderShowcaseSocialLinks(profile);
   renderShowcaseFollow(userId);
 
-  const [{ data: items, error }, { data: forSaleItems }] = await Promise.all([
+  const [{ data: items, error }, { data: forSaleItems }, { data: wishlistItems }] = await Promise.all([
     sb.from("public_showcase_items").select("*").eq("user_id", userId),
     sb.from("public_for_sale_items").select("*").eq("user_id", userId),
+    sb.from("public_wishlist_items").select("*").eq("owner_user_id", userId),
   ]);
 
   if (forSaleItems?.length) {
@@ -4130,6 +4448,8 @@ async function renderPublicShowcase({ userId, username }) {
   } else {
     el.showcaseForsaleSection.hidden = true;
   }
+
+  await renderShowcaseWishlist(wishlistItems ?? [], userId);
 
   // fil d'activité : les derniers ajouts, façon Letterboxd — chaque exemplaire ajouté compte
   // comme un événement, y compris un doublon d'un item déjà présent
@@ -6849,6 +7169,7 @@ async function addDetailToCollection(status) {
     attributes = {
       ...(detail.game && { game: detail.game }),
       ...(detail.set_name && { set_name: detail.set_name }),
+      ...(detail.set_id && { set_id: detail.set_id }),
       ...(detail.card_number && { card_number: detail.card_number }),
       ...(detail.rarity && { rarity: detail.rarity }),
       ...(detail.year && { year: detail.year }),
