@@ -31,6 +31,11 @@ const el = {
   viewCollectionBtn: document.getElementById("view-collection"),
   homeView: document.getElementById("home-view"),
   homeCategories: document.getElementById("home-categories"),
+  homeResume: document.getElementById("home-resume"),
+  homeResumeContent: document.getElementById("home-resume-content"),
+  homeMinigamesTile: document.getElementById("home-minigames-tile"),
+  homeMinigamesTileSub: document.getElementById("home-minigames-tile-sub"),
+  homeMinigamesTileBtn: document.getElementById("home-minigames-tile-btn"),
   globalSearchInput: document.getElementById("global-search-input"),
   globalSearchResults: document.getElementById("global-search-results"),
   backToHomeBtn: document.getElementById("back-to-home"),
@@ -410,6 +415,8 @@ async function initAuth() {
     currentUser = session?.user ?? null;
     renderAuth();
     if (categories.length) renderHome(); // affiche/masque la tuile "Nouvelle collection" selon la connexion
+    renderHomeResume();
+    renderHomeMinigamesTile();
     if (currentUser) loadMyCollection();
   });
 }
@@ -674,35 +681,146 @@ async function loadCategories() {
   switchView("home");
 }
 
+// Regroupement des tuiles de catégories par grandes familles (refonte accueil, Phase 11) :
+// plus lisible qu'une grille plate une fois qu'on a 9+ catégories (dont des catégories perso
+// en libre-service qui peuvent se multiplier). Tout ce qui n'est pas explicitement rangé dans
+// Musique/Vidéo/Papier tombe dans "Objets & collections personnalisées" (timbres, monnaies,
+// TCG, et toute catégorie créée par un utilisateur) — pas besoin de savoir si une catégorie
+// est "custom", il suffit de ne pas la lister ailleurs.
+const CATEGORY_FAMILIES = [
+  { name: "Musique", icon: "🎵", slugs: ["vinyl", "cd"] },
+  { name: "Vidéo", icon: "🎬", slugs: ["dvd", "movie_poster", "video_game"] },
+  { name: "Papier", icon: "📖", slugs: ["book"] },
+];
+
 function renderHome() {
   el.homeCategories.innerHTML = "";
+  const familyBuckets = CATEGORY_FAMILIES.map((f) => ({ ...f, cats: [] }));
+  const otherBucket = { name: "Objets & collections personnalisées", icon: "🧩", cats: [] };
   categories.forEach((cat) => {
-    const card = document.createElement("button");
-    card.type = "button";
-    card.className = "home-category-card";
-    card.innerHTML = `
-      <span class="home-category-icon">${cat.icon ?? ""}</span>
-      <span class="home-category-name">${escapeHtml(cat.name)}</span>
-    `;
-    card.onclick = () => {
-      selectCategory(cat.slug);
-      switchView("catalogue");
-    };
-    el.homeCategories.appendChild(card);
+    const family = familyBuckets.find((f) => f.slugs.includes(cat.slug));
+    (family ?? otherBucket).cats.push(cat);
   });
 
-  if (currentUser) {
-    const newCard = document.createElement("button");
-    newCard.type = "button";
-    newCard.className = "home-category-card home-category-card-new";
-    newCard.innerHTML = `
-      <span class="home-category-icon">➕</span>
-      <span class="home-category-name">Nouvelle collection</span>
-    `;
-    newCard.onclick = openNewCategoryModal;
-    el.homeCategories.appendChild(newCard);
-  }
+  [...familyBuckets, otherBucket].forEach((family) => {
+    const isOtherBucket = family === otherBucket;
+    // on affiche quand même "Objets & collections personnalisées" vide (connecté) pour que la
+    // tuile "Nouvelle collection" reste accessible même sans catégorie de ce type pour l'instant.
+    if (!family.cats.length && !(isOtherBucket && currentUser)) return;
+
+    const group = document.createElement("div");
+    group.className = "home-category-family";
+    group.innerHTML = `<h3 class="home-category-family-title">${family.icon} ${family.name}</h3>`;
+    const grid = document.createElement("div");
+    grid.className = "home-category-grid";
+
+    family.cats.forEach((cat) => {
+      const card = document.createElement("button");
+      card.type = "button";
+      card.className = "home-category-card";
+      card.innerHTML = `
+        <span class="home-category-icon">${cat.icon ?? ""}</span>
+        <span class="home-category-name">${escapeHtml(cat.name)}</span>
+      `;
+      card.onclick = () => {
+        selectCategory(cat.slug);
+        switchView("catalogue");
+      };
+      grid.appendChild(card);
+    });
+
+    if (isOtherBucket && currentUser) {
+      const newCard = document.createElement("button");
+      newCard.type = "button";
+      newCard.className = "home-category-card home-category-card-new";
+      newCard.innerHTML = `
+        <span class="home-category-icon">➕</span>
+        <span class="home-category-name">Nouvelle collection</span>
+      `;
+      newCard.onclick = openNewCategoryModal;
+      grid.appendChild(newCard);
+    }
+
+    group.appendChild(grid);
+    el.homeCategories.appendChild(group);
+  });
 }
+
+// ---------- accueil : "reprendre où j'en étais" (refonte accueil, Phase 11) ----------
+// Derniers exemplaires ajoutés à la collection (toutes catégories), cliquables vers leur
+// fiche détail — réutilise fetchCollectionEntries() (déjà triée par created_at desc) plutôt
+// que d'écrire une requête dédiée.
+async function renderHomeResume() {
+  if (!currentUser) {
+    el.homeResume.hidden = true;
+    return;
+  }
+  const entries = await fetchCollectionEntries();
+  const recent = entries.slice(0, 6);
+  el.homeResume.hidden = recent.length === 0;
+  if (!recent.length) return;
+
+  el.homeResumeContent.innerHTML = "";
+  const list = document.createElement("div");
+  list.className = "home-resume-items";
+  recent.forEach((entry) => {
+    const item = entry.items;
+    const cat = item.categories;
+    const card = document.createElement("button");
+    card.type = "button";
+    card.className = "home-resume-item";
+    card.innerHTML = `
+      <img src="${item.cover_image_url ?? ""}" alt="" onerror="this.style.visibility='hidden'" />
+      <span>${escapeHtml(item.title)}</span>
+    `;
+    card.onclick = () => openItemDetail(item, cat);
+    list.appendChild(card);
+  });
+  el.homeResumeContent.appendChild(list);
+}
+
+// ---------- accueil : mini-tuile "Mini-jeux du jour" (refonte accueil, Phase 11) ----------
+// Donne un peu de visibilité à l'onglet Mini-jeux depuis l'accueil : dernier jeu auquel
+// l'utilisateur a joué (accès rapide) + qui mène le classement général du mois.
+async function renderHomeMinigamesTile() {
+  if (!currentUser) {
+    el.homeMinigamesTile.hidden = true;
+    return;
+  }
+  el.homeMinigamesTile.hidden = false;
+  el.homeMinigamesTileSub.textContent = "Chargement...";
+
+  const now = new Date();
+  const { data: events } = await sb
+    .from("game_score_events")
+    .select("user_id, points, played_at, game_slug")
+    .gte("played_at", new Date(now.getFullYear(), now.getMonth(), 1).toISOString());
+
+  const myLast = (events ?? [])
+    .filter((e) => e.user_id === currentUser.id)
+    .sort((a, b) => new Date(b.played_at) - new Date(a.played_at))[0];
+
+  const totals = new Map();
+  (events ?? []).forEach((e) => totals.set(e.user_id, (totals.get(e.user_id) ?? 0) + e.points));
+  const ranked = [...totals.entries()].sort((a, b) => b[1] - a[1]);
+  const topUserId = ranked[0]?.[0];
+
+  const subLines = [];
+  if (myLast) subLines.push(`Dernière partie : ${GAME_LABELS[myLast.game_slug] ?? "Mini-jeu"}`);
+  if (topUserId) {
+    const { data: identity } = await sb.from("player_identities").select("*").eq("id", topUserId).maybeSingle();
+    const name = escapeHtml(identity?.display_name || identity?.username || "Un joueur");
+    const points = ranked[0][1];
+    subLines.push(`🏆 ${name} mène le classement du mois (${points} pt${points > 1 ? "s" : ""})`);
+  } else {
+    subLines.push("Sois le premier à marquer des points ce mois-ci !");
+  }
+  // vérifie qu'on est toujours sur l'accueil / connecté avant d'écrire (appel asynchrone)
+  if (!currentUser) return;
+  el.homeMinigamesTileSub.innerHTML = subLines.join("<br />");
+}
+
+el.homeMinigamesTileBtn.addEventListener("click", () => switchView("minigames"));
 
 // ---------- création d'une collection personnalisée (self-service) ----------
 // Les catégories de base (vinyles, jeux vidéo...) sont gérées par l'admin, mais
@@ -1587,6 +1705,10 @@ function switchView(view) {
   el.viewStatsBtn.classList.toggle("active", view === "stats");
   el.viewFunBtn.classList.toggle("active", view === "fun");
   el.viewMinigamesBtn.classList.toggle("active", view === "minigames");
+  if (view === "home") {
+    renderHomeResume();
+    renderHomeMinigamesTile();
+  }
   if (view === "collection") loadMyCollection();
   if (view === "stats") loadStats();
   if (view === "fun") loadFunView();
