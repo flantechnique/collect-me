@@ -120,6 +120,11 @@ const el = {
   guessOwnerJoinCode: document.getElementById("guessowner-join-code"),
   guessOwnerJoinBtn: document.getElementById("guessowner-join-btn"),
   guessOwnerArea: document.getElementById("guessowner-area"),
+  gameFullscreenOverlay: document.getElementById("game-fullscreen-overlay"),
+  gameFullscreenName: document.getElementById("game-fullscreen-name"),
+  gameFullscreenCounter: document.getElementById("game-fullscreen-counter"),
+  gameFullscreenClose: document.getElementById("game-fullscreen-close"),
+  gameFullscreenBody: document.getElementById("game-fullscreen-body"),
   funView: document.getElementById("fun-view"),
   recommendationsContent: document.getElementById("recommendations-content"),
   compareInput: document.getElementById("compare-input"),
@@ -4739,6 +4744,59 @@ const GAME_LABELS = {
   guess_owner: "🕵️ C'est à qui ça ?",
 };
 
+// ---------- mode plein écran pendant une partie (retour utilisateur) ----------
+// Plutôt que de réécrire le rendu de chacun des 3 jeux (solo et salon confondus, qui ciblent
+// tous déjà le même conteneur générique via areaElFor()/currentGameRoom.areaEl), on déplace ce
+// conteneur EXISTANT à l'intérieur du calque plein écran au moment où une manche démarre, et on
+// le replace à son emplacement d'origine à la sortie. Toute la logique de jeu déjà en place
+// continue de fonctionner sans modification.
+let gameFullscreenState = null; // { areaEl, originalParent, gameSlug, roundActive }
+
+function enterGameFullscreen(gameSlug, areaEl, { counterText = "", roundActive = true } = {}) {
+  if (gameFullscreenState && gameFullscreenState.areaEl !== areaEl) exitGameFullscreen();
+  if (!gameFullscreenState) {
+    gameFullscreenState = { areaEl, originalParent: areaEl.parentElement, gameSlug, roundActive };
+    el.gameFullscreenBody.appendChild(areaEl);
+    document.body.classList.add("game-fullscreen-lock");
+  } else {
+    gameFullscreenState.gameSlug = gameSlug;
+    gameFullscreenState.roundActive = roundActive;
+  }
+  el.gameFullscreenName.textContent = GAME_LABELS[gameSlug] ?? "Mini-jeu";
+  el.gameFullscreenCounter.textContent = counterText;
+  el.gameFullscreenOverlay.hidden = false;
+}
+
+function exitGameFullscreen() {
+  if (gameFullscreenState) {
+    const { areaEl, originalParent } = gameFullscreenState;
+    if (originalParent) originalParent.appendChild(areaEl);
+    gameFullscreenState = null;
+  }
+  document.body.classList.remove("game-fullscreen-lock");
+  el.gameFullscreenOverlay.hidden = true;
+  el.gameFullscreenCounter.textContent = "";
+}
+
+// Quitter en cours de manche = abandon (annule la partie / le salon) ; quitter depuis un écran
+// de résultat ou une erreur = simple fermeture, rien à perdre, pas de confirmation nécessaire.
+el.gameFullscreenClose.addEventListener("click", async () => {
+  if (!gameFullscreenState) return exitGameFullscreen();
+  const { roundActive, gameSlug } = gameFullscreenState;
+  if (!roundActive) return exitGameFullscreen();
+  if (!confirm("Quitter la partie ? Ta partie en cours sera annulée.")) return;
+  if (currentGameRoom) {
+    await leaveGameRoomForGood();
+  } else if (gameSlug === "quiz_playlist" && quizSoloState) {
+    quizSoloState = null;
+    el.quizplaylistArea.innerHTML = "";
+  } else if (gameSlug === "pixel_guess" && pixelSoloState) {
+    pixelSoloState = null;
+    el.pixelguessArea.innerHTML = "";
+  }
+  exitGameFullscreen();
+});
+
 // ---------- classement ----------
 let lbScope = "general";
 let lbPeriod = "month";
@@ -4946,6 +5004,10 @@ async function nextQuizPlaylistSoloRound() {
 }
 
 function renderQuizPlaylistSoloQuestion(question) {
+  enterGameFullscreen("quiz_playlist", el.quizplaylistArea, {
+    counterText: `Question ${quizSoloState.round}/10`,
+    roundActive: true,
+  });
   const wrapper = document.createElement("div");
   wrapper.className = "quiz-round";
   wrapper.innerHTML = `
@@ -4983,6 +5045,7 @@ function renderQuizPlaylistSoloQuestion(question) {
 async function finishQuizPlaylistSolo() {
   const score = quizSoloState.score;
   await recordGameScore("quiz_playlist", score);
+  enterGameFullscreen("quiz_playlist", el.quizplaylistArea, { counterText: "Résultats", roundActive: false });
   el.quizplaylistArea.innerHTML = `
     <div class="quiz-result">
       <p>🎉 Partie terminée : <strong>${score}/10</strong></p>
@@ -5358,6 +5421,7 @@ function renderGameRoom() {
   const { room, players, isHost, areaEl } = currentGameRoom;
 
   if (room.status === "waiting") {
+    exitGameFullscreen(); // lobby : affichage normal, pas encore de manche à jouer
     const wrapper = document.createElement("div");
     wrapper.className = "game-room-lobby";
     wrapper.innerHTML = `
@@ -5378,11 +5442,18 @@ function renderGameRoom() {
   }
 
   if (room.status === "playing") {
+    enterGameFullscreen(room.game_slug, areaEl, {
+      counterText: `Manche ${room.current_round}/${room.total_rounds}`,
+      roundActive: true,
+    });
     if (room.game_slug === "pixel_guess") return renderPixelGuessRoomRound();
     if (room.game_slug === "guess_owner") return renderGuessOwnerRound();
     return renderQuizRoomRound();
   }
-  if (room.status === "finished") return renderGameRoomResults();
+  if (room.status === "finished") {
+    enterGameFullscreen(room.game_slug, areaEl, { counterText: "Résultats", roundActive: false });
+    return renderGameRoomResults();
+  }
 }
 
 function renderQuizRoomRound() {
@@ -5691,6 +5762,7 @@ function renderGameRoomResults() {
   }
   document.getElementById("room-final-leave-btn").onclick = () => {
     leaveGameRoomForGood();
+    exitGameFullscreen();
     renderLeaderboard();
   };
 }
@@ -5808,6 +5880,10 @@ async function nextPixelGuessSoloRound() {
 }
 
 function renderPixelGuessSoloRound() {
+  enterGameFullscreen("pixel_guess", el.pixelguessArea, {
+    counterText: `Objet ${pixelSoloState.round}/5`,
+    roundActive: true,
+  });
   const wrapper = document.createElement("div");
   wrapper.className = "quiz-round pixelguess-round";
   wrapper.innerHTML = `
@@ -5879,6 +5955,7 @@ function showPixelGuessNextButton(wrapper) {
 async function finishPixelGuessSolo() {
   const score = pixelSoloState.score;
   await recordGameScore("pixel_guess", score);
+  enterGameFullscreen("pixel_guess", el.pixelguessArea, { counterText: "Résultats", roundActive: false });
   el.pixelguessArea.innerHTML = `
     <div class="quiz-result">
       <p>🎉 Partie terminée : <strong>${score}/15</strong></p>

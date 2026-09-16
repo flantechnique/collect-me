@@ -2061,6 +2061,94 @@ form#add-item-form button[type="submit"]:hover { background: var(--accent-hover)
 
 .minigame-join-row button:hover { background: var(--accent-hover); }
 
+/* ---------- Mini-jeux : mode plein écran pendant une partie ----------
+   Retour utilisateur : une fois la partie lancée, on masque tout le reste de l'app (header,
+   nav, classement...) derrière un calque légèrement transparent qui ne montre que l'essentiel
+   (nom du jeu, manche en cours, question/réponses, bouton valider) et une croix pour quitter.
+   Techniquement : on déplace le conteneur existant du jeu (#quizplaylist-area etc., déjà
+   utilisé par tout le code de rendu existant) à l'intérieur de ce calque, sans rien réécrire
+   côté logique de jeu — voir enterGameFullscreen()/exitGameFullscreen() dans app.js. */
+.game-fullscreen-overlay {
+  /* Le conteneur de jeu déplacé ici vient de sortir du sous-arbre #minigames-view : sans ça,
+     il perdrait la teinte violette et reviendrait à la terracotta par défaut pendant la partie
+     elle-même, ce qui serait le pire moment pour perdre cette identité visuelle. */
+  --accent: var(--game-accent);
+  --accent-hover: var(--game-accent-hover);
+  --accent-soft: var(--game-accent-soft);
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: flex;
+  flex-direction: column;
+  background: rgba(58, 46, 34, 0.88);
+  backdrop-filter: blur(6px);
+}
+
+body.game-fullscreen-lock { overflow: hidden; }
+
+.game-fullscreen-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem 1.25rem;
+  flex-shrink: 0;
+}
+
+.game-fullscreen-title {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  color: #fff8f0;
+  font-family: "Fraunces", Georgia, serif;
+  font-size: 1.15rem;
+  font-weight: 700;
+}
+
+.game-fullscreen-counter {
+  font-family: "Nunito", sans-serif;
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: rgba(255, 248, 240, 0.75);
+}
+
+.game-fullscreen-close {
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff8f0;
+  border: none;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  font-size: 1.5rem;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+.game-fullscreen-close:hover { background: rgba(255, 255, 255, 0.24); }
+
+.game-fullscreen-body {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 0.5rem 1.25rem 2rem;
+}
+
+.game-fullscreen-body .card,
+.game-fullscreen-body > div {
+  width: 100%;
+  max-width: 480px;
+  background: var(--card);
+  border-radius: 20px;
+  padding: 1.5rem;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.25);
+}
+
+@media (max-width: 600px) {
+  .game-fullscreen-body { padding: 0.5rem 0.85rem 1.5rem; }
+  .game-fullscreen-body > div { padding: 1.1rem; border-radius: 16px; }
+}
+
 .quiz-round-counter {
   font-weight: 700;
   color: var(--muted);
