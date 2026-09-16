@@ -36,19 +36,9 @@ function applyThemeChoice(choice) {
   el.themeToggleBtn.title = THEME_LABELS[choice];
   el.themeToggleBtn.setAttribute("aria-label", THEME_LABELS[choice]);
 }
-applyThemeChoice(currentThemeChoice());
-el.themeToggleBtn.addEventListener("click", () => {
-  const order = ["system", "light", "dark"];
-  const next = order[(order.indexOf(currentThemeChoice()) + 1) % order.length];
-  try {
-    if (next === "system") localStorage.removeItem("glanure-theme");
-    else localStorage.setItem("glanure-theme", next);
-  } catch (e) {
-    // localStorage indisponible (navigation privée...) : le thème s'applique quand même
-    // pour la session en cours, simplement non mémorisé pour la prochaine visite
-  }
-  applyThemeChoice(next);
-});
+// L'initialisation (appliquer le choix courant + brancher le clic) est faite plus bas, une
+// fois `el` défini (voir juste après la déclaration de `el`) — ces deux fonctions référencent
+// `el.themeToggleBtn`, qui n'existe pas encore à ce stade du fichier.
 
 // ---------- state ----------
 let currentUser = null;
@@ -289,6 +279,22 @@ const el = {
   footerCguBtn: document.getElementById("footer-cgu-btn"),
   footerCgvBtn: document.getElementById("footer-cgv-btn"),
 };
+
+// Initialisation du thème clair/sombre (fonctions définies plus haut) : doit avoir lieu
+// après la déclaration de `el` ci-dessus, dont elle dépend.
+applyThemeChoice(currentThemeChoice());
+el.themeToggleBtn.addEventListener("click", () => {
+  const order = ["system", "light", "dark"];
+  const next = order[(order.indexOf(currentThemeChoice()) + 1) % order.length];
+  try {
+    if (next === "system") localStorage.removeItem("glanure-theme");
+    else localStorage.setItem("glanure-theme", next);
+  } catch (e) {
+    // localStorage indisponible (navigation privée...) : le thème s'applique quand même
+    // pour la session en cours, simplement non mémorisé pour la prochaine visite
+  }
+  applyThemeChoice(next);
+});
 
 let currentDetail = null;
 
