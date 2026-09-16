@@ -377,17 +377,47 @@ function itemYear(item) {
   return Number.isFinite(year) ? year : null;
 }
 
-// ---------- valeur estimée (Phase 11 point 4) ----------
-// "Prix neuf" automatique capturé au moment de l'ajout au catalogue (voir discogs-search
-// et tcg-search) — un instantané, pas une cote qui se met à jour toute seule. Affiché sous
-// forme de repère indicatif, jamais comme une valeur de revente garantie. Devises non
+// ---------- valeur estimée (Phase 11 point 4, étendu le 2026-09-16) ----------
+// Deux sources, par ordre de priorité :
+// 1. Prix d'achat moyen réellement renseigné par les collectionneurs en vitrine publique pour
+//    ce même item de catalogue (vue item_price_stats, toujours en EUR par convention de
+//    l'app) — couvre potentiellement toutes les catégories, pas seulement celles avec une
+//    API de prix branchée.
+// 2. À défaut, le "prix neuf" automatique capturé au moment de l'ajout au catalogue (Discogs,
+//    TCG) — un instantané, pas une cote qui se met à jour toute seule.
+// Dans tous les cas un repère indicatif, jamais une valeur de revente garantie. Devises non
 // converties (pas d'API de change branchée) : affichées telles que fournies par la source.
-function estimatedValueLabel(item) {
+const itemPriceStatsCache = new Map(); // item_id -> { avg_price_paid, price_count } | null
+
+async function fetchItemPriceStats(itemIds) {
+  const idsToFetch = [...new Set(itemIds)].filter((id) => id && !itemPriceStatsCache.has(id));
+  if (!idsToFetch.length) return;
+  idsToFetch.forEach((id) => itemPriceStatsCache.set(id, null)); // marque comme "vérifié" même si rien trouvé
+  const { data } = await sb.from("item_price_stats").select("*").in("item_id", idsToFetch);
+  (data ?? []).forEach((row) => itemPriceStatsCache.set(row.item_id, row));
+}
+
+// Résout la meilleure valeur disponible pour un item, tous appelants confondus (cartes
+// catalogue/collection, fiche détail, agrégat Statistiques) — un seul endroit qui connaît
+// l'ordre de priorité des deux sources.
+function resolvedItemValue(item) {
+  const stat = itemPriceStatsCache.get(item.id);
+  if (stat?.avg_price_paid != null) {
+    return { amount: Number(stat.avg_price_paid), currency: "EUR", isCommunityAverage: true, count: stat.price_count };
+  }
   const amount = item.attributes?.estimated_value_amount;
   if (amount == null) return null;
-  const currency = item.attributes?.estimated_value_currency;
-  const symbol = currency === "EUR" ? "€" : currency === "USD" ? "$" : "";
-  return `≈ ${Number(amount).toFixed(2)} ${symbol}`.trim();
+  return { amount: Number(amount), currency: item.attributes?.estimated_value_currency ?? "EUR", isCommunityAverage: false };
+}
+
+function estimatedValueLabel(item) {
+  const resolved = resolvedItemValue(item);
+  if (!resolved) return null;
+  const symbol = resolved.currency === "USD" ? "$" : "€";
+  const suffix = resolved.isCommunityAverage
+    ? ` (moyenne de ${resolved.count} collectionneur${resolved.count > 1 ? "s" : ""})`
+    : "";
+  return `≈ ${resolved.amount.toFixed(2)} ${symbol}${suffix}`;
 }
 
 // Agrégat multi-devises pour les stats (pas de conversion de change — pas d'API de taux
@@ -1213,6 +1243,7 @@ async function loadCatalogue() {
   if (error) return console.error(error);
 
   currentCatalogueItems = data;
+  await fetchItemPriceStats(data.map((item) => item.id));
   renderCatalogueList();
 }
 
@@ -1421,6 +1452,8 @@ async function loadMyCollection() {
     .eq("user_id", currentUser.id)
     .order("created_at", { ascending: false });
   if (error) return console.error(error);
+
+  await fetchItemPriceStats(data.map((entry) => entry.item_id));
 
   const filterSlug = el.collectionFilter.value;
   let rows = filterSlug ? data.filter((r) => r.items.categories.slug === filterSlug) : data;
@@ -2646,6 +2679,7 @@ async function loadStats() {
   el.statsContent.innerHTML = "<p class='empty'>Chargement...</p>";
   el.timelineContent.innerHTML = "<p class='empty'>Chargement...</p>";
   const entries = await fetchCollectionEntries();
+  await fetchItemPriceStats(entries.map((e) => e.item_id));
   renderStats(entries);
   renderTimeline(entries);
   el.wrappedContent.innerHTML = "";
@@ -2666,9 +2700,10 @@ function renderStats(entries) {
   let spentCount = 0;
   const byYear = new Map(); // année -> nombre d'acquisitions
 
-  // ---- valeur estimée (Phase 11 point 4) : prix payé renseigné en priorité, sinon repli
-  // sur le "prix neuf" automatique du catalogue (voir estimatedValueLabel) — seulement pour
-  // ce qu'on possède réellement (owned/for_sale), pas les items juste "recherchés".
+  // ---- valeur estimée (Phase 11 point 4, étendu le 2026-09-16) : prix payé sur CET exemplaire
+  // en priorité, sinon repli sur resolvedItemValue() (moyenne communautaire puis "prix neuf"
+  // automatique du catalogue, voir plus haut) — seulement pour ce qu'on possède réellement
+  // (owned/for_sale), pas les items juste "recherchés".
   let estimatedValueEUR = 0;
   let estimatedValueUSD = 0;
   let estimatedValueCount = 0;
@@ -2691,10 +2726,10 @@ function renderStats(entries) {
         estimatedValueEUR += Number(e.price_paid); // prix payé toujours traité en € dans l'app
         estimatedValueCount++;
       } else {
-        const amount = e.items.attributes?.estimated_value_amount;
-        if (amount != null) {
-          if (e.items.attributes?.estimated_value_currency === "USD") estimatedValueUSD += Number(amount);
-          else estimatedValueEUR += Number(amount);
+        const resolved = resolvedItemValue(e.items);
+        if (resolved) {
+          if (resolved.currency === "USD") estimatedValueUSD += resolved.amount;
+          else estimatedValueEUR += resolved.amount;
           estimatedValueCount++;
         }
       }
@@ -3764,7 +3799,10 @@ async function renderPublicShowcase({ userId, username }) {
     const forSaleGrid = document.createElement("div");
     forSaleGrid.className = "pokedex-grid";
     forSaleItems.forEach((item) => {
-      const card = document.createElement("div");
+      const card = document.createElement("a");
+      card.href = `?item=${item.item_id}`;
+      card.target = "_blank";
+      card.rel = "noopener";
       card.className = "pokedex-card owned";
       card.innerHTML = `
         <img src="${item.cover_image_url ?? ""}" alt="" onerror="this.style.visibility='hidden'" />
@@ -3786,7 +3824,10 @@ async function renderPublicShowcase({ userId, username }) {
     el.showcaseActivitySection.hidden = false;
     el.showcaseActivityContent.innerHTML = "";
     recent.forEach((item) => {
-      const row = document.createElement("div");
+      const row = document.createElement("a");
+      row.href = `?item=${item.item_id}`;
+      row.target = "_blank";
+      row.rel = "noopener";
       row.className = "activity-row";
       row.innerHTML = `
         <img src="${item.cover_image_url ?? ""}" alt="" onerror="this.style.visibility='hidden'" />
@@ -3812,7 +3853,10 @@ async function renderPublicShowcase({ userId, username }) {
   const grid = document.createElement("div");
   grid.className = "pokedex-grid";
   uniqueItems.forEach((item) => {
-    const card = document.createElement("div");
+    const card = document.createElement("a");
+    card.href = `?item=${item.item_id}`;
+    card.target = "_blank";
+    card.rel = "noopener";
     card.className = "pokedex-card owned";
     card.innerHTML = `
       <img src="${item.cover_image_url ?? ""}" alt="" onerror="this.style.visibility='hidden'" />
@@ -5584,16 +5628,20 @@ async function openItemDetail(item, cat) {
   renderLocalItemDetail(item, cat);
 }
 
-function renderLocalItemDetail(item, cat) {
+async function renderLocalItemDetail(item, cat) {
   currentDetail = null;
   switchView("detail");
+  el.detailContent.innerHTML = "<p class='empty'>Chargement...</p>";
+  await fetchItemPriceStats([item.id]);
 
   const creatorKey = CREATOR_FIELD_BY_CATEGORY[cat.slug];
+  const value = estimatedValueLabel(item);
   let html = `
     <div class="detail-header">
       <img class="detail-cover" src="${item.cover_image_url ?? ""}" alt="" onerror="this.style.visibility='hidden'" />
       <div>
         <h2>${escapeHtml(item.title)}</h2>
+        ${value ? `<p class="estimated-value">💰 Valeur estimée : ${escapeHtml(value)}</p>` : ""}
       </div>
     </div>
     <ul class="attrs">

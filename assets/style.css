@@ -1496,7 +1496,15 @@ form#add-item-form button[type="submit"]:hover { background: var(--accent-hover)
   display: flex;
   align-items: center;
   gap: 0.75rem;
+  text-decoration: none;
+  color: var(--text);
+  cursor: pointer;
+  border-radius: 10px;
+  padding: 0.3rem;
+  transition: background 0.15s ease;
 }
+
+.activity-row:hover { background: var(--accent-soft); }
 
 .activity-row img {
   width: 40px;
