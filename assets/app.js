@@ -20,6 +20,9 @@ let catalogueSearchQuery = "";
 let catalogueSortKey = "recent";
 let collectionSearchQuery = "";
 let collectionViewMode = "list"; // "list" | "pokedex"
+let currentTcgSet = null; // { set_id, game, name, releaseYear, logo, cardCount } du set actuellement affiché
+let currentTcgSetCards = []; // cartes chargées pour ce set (import en masse TCG)
+let tcgSelectedCardIds = new Set(); // tcg_id des cartes cochées pour l'import en masse
 
 // ---------- elements ----------
 const el = {
@@ -43,6 +46,12 @@ const el = {
   externalSearch: document.getElementById("external-search"),
   externalSearchInput: document.getElementById("external-search-input"),
   externalSearchResults: document.getElementById("external-search-results"),
+  tcgSetSearch: document.getElementById("tcg-set-search"),
+  tcgSetSearchToggle: document.getElementById("tcg-set-search-toggle"),
+  tcgSetSearchPanel: document.getElementById("tcg-set-search-panel"),
+  tcgSetSearchInput: document.getElementById("tcg-set-search-input"),
+  tcgSetSearchResults: document.getElementById("tcg-set-search-results"),
+  tcgSetCardsArea: document.getElementById("tcg-set-cards-area"),
   communityFeed: document.getElementById("community-feed"),
   topSearches: document.getElementById("top-searches"),
   detailView: document.getElementById("detail-view"),
@@ -865,6 +874,17 @@ function selectCategory(slug) {
   el.externalSearchResults.innerHTML = "";
   el.externalSearchInput.value = "";
   el.barcodeScanBtn.hidden = !BARCODE_LOOKUP[slug];
+
+  // import en masse d'un set complet : seulement pour le TCG pour l'instant (Pokémon/Yu-Gi-Oh!/Magic)
+  el.tcgSetSearch.hidden = slug !== "tcg";
+  el.tcgSetSearchPanel.hidden = true;
+  el.tcgSetSearchResults.hidden = true;
+  el.tcgSetSearchResults.innerHTML = "";
+  el.tcgSetSearchInput.value = "";
+  el.tcgSetCardsArea.innerHTML = "";
+  currentTcgSet = null;
+  currentTcgSetCards = [];
+  tcgSelectedCardIds = new Set();
 
   loadCommunityFeed(cat);
   subscribeCommunityFeed(cat);
@@ -1706,6 +1726,301 @@ function renderExternalResults(results, cat) {
     row.onclick = () => openDetail(r, cat);
     el.externalSearchResults.appendChild(row);
   });
+}
+
+// ---------- import en masse d'un set TCG complet (Pokémon / Yu-Gi-Oh! / Magic) ----------
+// Plutôt que d'ajouter les cartes une par une, on recherche un SET entier (ex. "Écarlate
+// et Violet", "Legend of Blue Eyes White Dragon") puis on importe toutes les cartes cochées
+// en une fois. Les items/collection_entries sont créés en requêtes groupées (pas une par
+// carte) pour rester rapide même sur un set de 200+ cartes.
+let tcgSetSearchDebounceTimer = null;
+let tcgSetSearchToken = 0;
+
+el.tcgSetSearchToggle.addEventListener("click", () => {
+  el.tcgSetSearchPanel.hidden = !el.tcgSetSearchPanel.hidden;
+});
+
+el.tcgSetSearchInput.addEventListener("input", () => {
+  clearTimeout(tcgSetSearchDebounceTimer);
+  const query = el.tcgSetSearchInput.value.trim();
+  if (query.length < 2) {
+    el.tcgSetSearchResults.hidden = true;
+    el.tcgSetSearchResults.innerHTML = "";
+    return;
+  }
+  tcgSetSearchDebounceTimer = setTimeout(searchTcgSets, 350);
+});
+
+document.addEventListener("click", (e) => {
+  if (!el.tcgSetSearch.hidden && !el.tcgSetSearch.contains(e.target)) {
+    el.tcgSetSearchResults.hidden = true;
+  }
+});
+
+async function searchTcgSets() {
+  const query = el.tcgSetSearchInput.value.trim();
+  if (query.length < 2) return;
+  const token = ++tcgSetSearchToken;
+
+  const { data: { session } } = await sb.auth.getSession();
+  if (!session) {
+    el.tcgSetSearchResults.hidden = false;
+    el.tcgSetSearchResults.innerHTML = "<p class='empty'>Connecte-toi pour rechercher.</p>";
+    return;
+  }
+
+  el.tcgSetSearchResults.hidden = false;
+  el.tcgSetSearchResults.innerHTML = "<p class='empty'>Recherche...</p>";
+
+  const res = await fetch(
+    `${SUPABASE_URL}/functions/v1/tcg-search?sets=${encodeURIComponent(query)}`,
+    { headers: { Authorization: `Bearer ${session.access_token}` } }
+  );
+  const payload = await res.json();
+
+  if (token !== tcgSetSearchToken) return; // une frappe plus récente a déjà relancé une recherche
+
+  if (!res.ok) {
+    el.tcgSetSearchResults.innerHTML = `<p class='empty'>Erreur : ${escapeHtml(payload.error ?? res.statusText)}</p>`;
+    return;
+  }
+  renderTcgSetResults(payload.sets ?? []);
+}
+
+function renderTcgSetResults(sets) {
+  el.tcgSetSearchResults.innerHTML = "";
+  if (!sets.length) {
+    el.tcgSetSearchResults.innerHTML = "<p class='empty'>Aucun set trouvé.</p>";
+    return;
+  }
+  sets.forEach((s) => {
+    const row = document.createElement("div");
+    row.className = "search-result-row";
+
+    const img = document.createElement("img");
+    img.src = s.logo ?? "";
+    img.alt = "";
+    img.onerror = () => { img.style.visibility = "hidden"; };
+    row.appendChild(img);
+
+    const info = document.createElement("div");
+    info.className = "info";
+    const meta = [s.game, s.releaseYear, s.cardCount ? `${s.cardCount} cartes` : null]
+      .filter(Boolean)
+      .join(" · ");
+    info.innerHTML = `
+      <span class="r-title">${escapeHtml(s.name)}</span>
+      <span class="r-meta">${escapeHtml(meta)}</span>
+    `;
+    row.appendChild(info);
+
+    row.onclick = () => loadTcgSetCards(s);
+    el.tcgSetSearchResults.appendChild(row);
+  });
+}
+
+async function loadTcgSetCards(set) {
+  el.tcgSetSearchResults.hidden = true;
+  el.tcgSetSearchInput.value = set.name;
+  currentTcgSet = set;
+  currentTcgSetCards = [];
+  tcgSelectedCardIds = new Set();
+  el.tcgSetCardsArea.innerHTML = "<p class='empty'>Chargement des cartes du set...</p>";
+
+  const { data: { session } } = await sb.auth.getSession();
+  const res = await fetch(
+    `${SUPABASE_URL}/functions/v1/tcg-search?set_cards=${encodeURIComponent(set.set_id)}`,
+    { headers: { Authorization: `Bearer ${session.access_token}` } }
+  );
+  const payload = await res.json();
+  if (!res.ok) {
+    el.tcgSetCardsArea.innerHTML = `<p class='empty'>Erreur : ${escapeHtml(payload.error ?? res.statusText)}</p>`;
+    return;
+  }
+  currentTcgSetCards = payload.cards ?? [];
+  if (!currentTcgSetCards.length) {
+    el.tcgSetCardsArea.innerHTML = "<p class='empty'>Aucune carte trouvée pour ce set.</p>";
+    return;
+  }
+  // tout coché par défaut : on recherche un set précisément dans l'idée de l'importer en entier
+  tcgSelectedCardIds = new Set(currentTcgSetCards.map((c) => c.tcg_id));
+  renderTcgSetCards();
+}
+
+function renderTcgSetCards() {
+  const area = el.tcgSetCardsArea;
+  area.innerHTML = "";
+
+  const header = document.createElement("div");
+  header.className = "tcg-set-header";
+  header.innerHTML = `
+    ${currentTcgSet.logo ? `<img src="${currentTcgSet.logo}" alt="" class="tcg-set-logo" onerror="this.style.visibility='hidden'" />` : ""}
+    <div>
+      <h3>${escapeHtml(currentTcgSet.name)}</h3>
+      <p class="muted">${escapeHtml(
+        [currentTcgSet.game, currentTcgSet.releaseYear].filter(Boolean).join(" · ")
+      )} · ${currentTcgSetCards.length} cartes</p>
+    </div>
+  `;
+  area.appendChild(header);
+
+  const controls = document.createElement("div");
+  controls.className = "tcg-set-controls";
+
+  const selectAllLabel = document.createElement("label");
+  const selectAllCheckbox = document.createElement("input");
+  selectAllCheckbox.type = "checkbox";
+  selectAllCheckbox.checked = tcgSelectedCardIds.size === currentTcgSetCards.length;
+  selectAllLabel.append(selectAllCheckbox, " Tout sélectionner");
+  controls.appendChild(selectAllLabel);
+
+  const statusSelect = document.createElement("select");
+  statusSelect.innerHTML = `<option value="owned">J'ai ça</option><option value="wanted">Je le veux</option>`;
+  controls.appendChild(statusSelect);
+
+  const addBtn = document.createElement("button");
+  addBtn.type = "button";
+  controls.appendChild(addBtn);
+  area.appendChild(controls);
+
+  const grid = document.createElement("div");
+  grid.className = "tcg-set-cards-grid";
+  area.appendChild(grid);
+
+  function updateAddBtn() {
+    const n = tcgSelectedCardIds.size;
+    addBtn.textContent = n ? `Ajouter ${n} carte${n > 1 ? "s" : ""}` : "Ajouter";
+    addBtn.disabled = n === 0;
+    selectAllCheckbox.checked = n === currentTcgSetCards.length;
+  }
+  updateAddBtn();
+
+  selectAllCheckbox.onchange = () => {
+    tcgSelectedCardIds = selectAllCheckbox.checked
+      ? new Set(currentTcgSetCards.map((c) => c.tcg_id))
+      : new Set();
+    grid.querySelectorAll("input[type=checkbox]").forEach((cb) => { cb.checked = selectAllCheckbox.checked; });
+    updateAddBtn();
+  };
+
+  addBtn.onclick = () => bulkImportTcgCards(statusSelect.value, addBtn);
+
+  currentTcgSetCards.forEach((c) => {
+    const card = document.createElement("label");
+    card.className = "tcg-set-card";
+
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = tcgSelectedCardIds.has(c.tcg_id);
+    checkbox.onchange = () => {
+      if (checkbox.checked) tcgSelectedCardIds.add(c.tcg_id);
+      else tcgSelectedCardIds.delete(c.tcg_id);
+      updateAddBtn();
+    };
+    card.appendChild(checkbox);
+
+    const img = document.createElement("img");
+    img.src = c.cover_image ?? "";
+    img.alt = "";
+    img.loading = "lazy";
+    img.onerror = () => { img.style.visibility = "hidden"; };
+    card.appendChild(img);
+
+    const label = document.createElement("span");
+    label.textContent = c.card_number ? `${c.card_number} · ${c.title}` : c.title;
+    card.appendChild(label);
+
+    grid.appendChild(card);
+  });
+}
+
+async function bulkImportTcgCards(status, triggerBtn) {
+  if (!currentUser) {
+    alert("Connecte-toi pour ajouter des cartes.");
+    return;
+  }
+  const cat = currentCategory();
+  const cardsToImport = currentTcgSetCards.filter((c) => tcgSelectedCardIds.has(c.tcg_id));
+  if (!cardsToImport.length) return;
+
+  const originalText = triggerBtn.textContent;
+  triggerBtn.disabled = true;
+  triggerBtn.textContent = "Import en cours...";
+
+  try {
+    const tcgIds = cardsToImport.map((c) => c.tcg_id);
+
+    // 1. items déjà présents dans le catalogue pour ces cartes (identifiés par tcg_id)
+    const { data: existingItems, error: existingErr } = await sb
+      .from("items")
+      .select("id, external_ids")
+      .eq("category_id", cat.id)
+      .in("external_ids->>tcg_id", tcgIds);
+    if (existingErr) throw existingErr;
+
+    const itemIdByTcgId = new Map();
+    (existingItems ?? []).forEach((it) => itemIdByTcgId.set(it.external_ids?.tcg_id, it.id));
+
+    // 2. crée en une seule requête groupée les items qui n'existent pas encore
+    const missingCards = cardsToImport.filter((c) => !itemIdByTcgId.has(c.tcg_id));
+    if (missingCards.length) {
+      const rows = missingCards.map((c) => ({
+        category_id: cat.id,
+        title: c.title,
+        cover_image_url: c.cover_image ?? null,
+        external_ids: { tcg_id: c.tcg_id },
+        attributes: {
+          ...(c.game && { game: c.game }),
+          ...(c.set_name && { set_name: c.set_name }),
+          ...(c.card_number && { card_number: c.card_number }),
+          ...(c.rarity && { rarity: c.rarity }),
+          ...(c.year && { year: c.year }),
+        },
+        source: "external_api",
+        created_by: currentUser.id,
+      }));
+      const { data: created, error: insertErr } = await sb
+        .from("items")
+        .insert(rows)
+        .select("id, external_ids");
+      if (insertErr) throw insertErr;
+      (created ?? []).forEach((it) => itemIdByTcgId.set(it.external_ids?.tcg_id, it.id));
+    }
+
+    const allItemIds = [...itemIdByTcgId.values()];
+
+    // 3. on n'ajoute pas de doublon dans la collection si la carte y est déjà (permet de relancer
+    // le même import sans re-créer des entrées, ex. après avoir complété le set en plusieurs fois)
+    const { data: existingEntries, error: entriesErr } = await sb
+      .from("collection_entries")
+      .select("item_id")
+      .eq("user_id", currentUser.id)
+      .in("item_id", allItemIds);
+    if (entriesErr) throw entriesErr;
+    const alreadyOwned = new Set((existingEntries ?? []).map((e) => e.item_id));
+
+    const newEntryItemIds = allItemIds.filter((id) => !alreadyOwned.has(id));
+    if (newEntryItemIds.length) {
+      const entryRows = newEntryItemIds.map((itemId) => ({ item_id: itemId, status, user_id: currentUser.id }));
+      const { error: entryInsertErr } = await sb.from("collection_entries").insert(entryRows);
+      if (entryInsertErr) throw entryInsertErr;
+    }
+
+    const skipped = allItemIds.length - newEntryItemIds.length;
+    const added = newEntryItemIds.length;
+    alert(
+      `${added} carte${added > 1 ? "s" : ""} ajoutée${added > 1 ? "s" : ""} à ta collection` +
+      (skipped ? ` (${skipped} déjà présente${skipped > 1 ? "s" : ""}, ignorée${skipped > 1 ? "s" : ""}).` : ".")
+    );
+
+    loadCatalogue();
+    loadMyCollection();
+  } catch (err) {
+    alert(err.message);
+  } finally {
+    triggerBtn.disabled = false;
+    triggerBtn.textContent = originalText;
+  }
 }
 
 // ---------- scan de code-barres (ZXing, caméra du téléphone/webcam) ----------
@@ -5492,6 +5807,17 @@ async function addDetailToCollection(status) {
       ...(detail.director && { director: detail.director }),
       ...(detail.genre && { genre: detail.genre }),
       ...(detail.release_year && { release_year: detail.release_year }),
+    };
+    coverImageUrl = detail.cover_image ?? null;
+  } else if (cat.slug === "tcg") {
+    title = detail.title;
+    externalIds = { tcg_id: detail.tcg_id };
+    attributes = {
+      ...(detail.game && { game: detail.game }),
+      ...(detail.set_name && { set_name: detail.set_name }),
+      ...(detail.card_number && { card_number: detail.card_number }),
+      ...(detail.rarity && { rarity: detail.rarity }),
+      ...(detail.year && { year: detail.year }),
     };
     coverImageUrl = detail.cover_image ?? null;
   }
