@@ -3910,6 +3910,43 @@ function loadMinigamesView() {
   if (!quizSoloState && !currentGameRoom) el.quizplaylistArea.innerHTML = "";
   if (!pixelSoloState && !currentGameRoom) el.pixelguessArea.innerHTML = "";
   if (!currentGameRoom) el.guessOwnerArea.innerHTML = "";
+  // Nettoyage opportuniste des salons abandonnés/terminés (trust & safety, Phase 11) : pas de
+  // cron, juste une purge à chaque visite de l'onglet — largement suffisant à l'échelle d'une
+  // app perso. Best-effort, ne doit jamais bloquer l'affichage.
+  if (currentUser) sb.rpc("cleanup_stale_game_rooms").catch(() => {});
+}
+
+// Appelle la edge function "arbitre" game-round (voir sa doc) : c'est elle qui connaît la
+// bonne réponse de chaque manche et qui seule peut désormais écrire is_correct/score — le
+// client ne les déclare plus jamais lui-même (trust & safety, Phase 11).
+async function callGameRoundFn(action, body) {
+  const { data: { session } } = await sb.auth.getSession();
+  if (!session) return { error: "not_authenticated" };
+  try {
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/game-round`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${session.access_token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ action, ...body }),
+    });
+    const payload = await res.json().catch(() => ({}));
+    if (!res.ok) return { error: payload.error || `HTTP ${res.status}` };
+    return { data: payload };
+  } catch (e) {
+    return { error: String(e) };
+  }
+}
+
+// Sépare une question construite localement (qui contient la bonne réponse) en une partie
+// PUBLIQUE (diffusée à tous les joueurs via game_rooms.current_question) et une partie
+// SECRÈTE (connue seulement du serveur, voir game-round action "start_round") — c'est ce qui
+// empêche désormais la bonne réponse de transiter en clair par Realtime.
+function splitRoomQuestion(gameSlug, question) {
+  if (gameSlug === "guess_owner") {
+    const { ownerUserId, ...questionPublic } = question;
+    return { questionPublic, secret: { ownerUserId } };
+  }
+  const { correctAnswer, ...questionPublic } = question;
+  return { questionPublic, secret: { correctAnswer } };
 }
 
 // aire d'affichage propre à chaque mini-jeu (salon multijoueur générique)
@@ -4284,9 +4321,14 @@ async function refreshRoomPlayers() {
   currentGameRoom.players = data ?? [];
 }
 
+// Délai de grâce avant de considérer l'hôte comme réellement absent (détection de présence,
+// trust & safety Phase 11) — évite de réagir à une brève reconnexion ou un rechargement de
+// page plutôt qu'à un départ brutal (onglet fermé, crash, perte réseau).
+const HOST_ABSENCE_GRACE_MS = 12000;
+
 function subscribeGameRoomChannel(roomId) {
   gameRoomChannel = sb
-    .channel(`game-room-${roomId}`)
+    .channel(`game-room-${roomId}`, { config: { presence: { key: currentUser.id } } })
     .on(
       "postgres_changes",
       { event: "UPDATE", schema: "public", table: "game_rooms", filter: `id=eq.${roomId}` },
@@ -4296,10 +4338,17 @@ function subscribeGameRoomChannel(roomId) {
         // (même code, mêmes joueurs) une fois la précédente terminée — détecté ici via le
         // compteur game_generation, incrémenté à chaque nouvelle partie lancée dans ce salon.
         const isNewGame = payload.new.game_generation !== currentGameRoom.room.game_generation;
+        // réassignation d'hôte (départ volontaire ou détection de présence, voir plus bas) :
+        // ce même événement UPDATE la propage à tous les clients.
+        const hostChanged = payload.new.host_id !== currentGameRoom.room.host_id;
         currentGameRoom.room = payload.new;
-        currentGameRoom.pointAwardedThisRound = false;
+        currentGameRoom.isHost = payload.new.host_id === currentUser.id;
         currentGameRoom.advancingRound = false;
         clearRoundTimeout();
+        if (hostChanged) {
+          currentGameRoom.hostAbsentSince = null;
+          currentGameRoom.reassignTriggered = false;
+        }
         if (isNewGame) {
           // le nouveau jeu a sa propre carte/zone d'affichage dans l'onglet Mini-jeux — on
           // bascule l'affichage dessus et on vide l'ancienne pour ne pas la laisser figée.
@@ -4308,12 +4357,15 @@ function subscribeGameRoomChannel(roomId) {
           if (oldAreaEl && oldAreaEl !== currentGameRoom.areaEl) oldAreaEl.innerHTML = "";
           currentGameRoom.myAnswerRound = null; // sinon l'ancien numéro de manche peut coïncider avec le nouveau
           currentGameRoom.combinedPool = null;
+          currentGameRoom.hostSecretOwnerId = null;
+          currentGameRoom.ownerInfoRound = null;
           currentGameRoom.scoreRecorded = false; // permet d'enregistrer le score classé de CETTE nouvelle partie
-          resetMyRoomScore();
+          // le score de TOUS les joueurs est remis à 0 côté serveur par la edge function
+          // (voir startNewGameInRoom) — plus besoin de le faire soi-même ici.
         }
-        // filet de sécurité : si l'hôte, on force le passage à la manche suivante quand le
-        // délai est écoulé (utile si un joueur ne répond jamais — sinon la manche resterait
-        // bloquée indéfiniment, faute d'un "tout le monde a répondu" jamais atteint).
+        // filet de sécurité : si l'hôte (courant, éventuellement nouvellement réassigné), on
+        // force le passage à la manche suivante quand le délai est écoulé (utile si un joueur
+        // ne répond jamais, ou si l'ancien hôte a disparu juste après avoir lancé la manche).
         if (currentGameRoom.isHost && payload.new.status === "playing" && payload.new.round_deadline) {
           const msLeft = new Date(payload.new.round_deadline).getTime() - Date.now() + 1500;
           const round = payload.new.current_round;
@@ -4341,7 +4393,52 @@ function subscribeGameRoomChannel(roomId) {
       { event: "INSERT", schema: "public", table: "game_room_answers", filter: `room_id=eq.${roomId}` },
       (payload) => handleRoomAnswerInsert(payload.new)
     )
-    .subscribe();
+    // Présence Realtime (trust & safety, Phase 11) : chaque client "track" sa propre présence
+    // dans le salon ; si l'hôte en disparaît durablement, checkHostPresence() déclenche une
+    // réassignation (voir plus bas).
+    .on("presence", { event: "sync" }, checkHostPresence)
+    .subscribe(async (status) => {
+      if (status === "SUBSCRIBED") {
+        try {
+          await gameRoomChannel.track({ online_at: Date.now() });
+        } catch (_e) {
+          // best-effort : un souci de présence ne doit pas empêcher de jouer
+        }
+      }
+    });
+  if (currentGameRoom) currentGameRoom.presenceInterval = setInterval(checkHostPresence, 4000);
+}
+
+// Détection de présence : si l'hôte est absent du salon depuis plus de HOST_ABSENCE_GRACE_MS
+// (déconnexion brutale, onglet fermé sans cliquer "Quitter"), le participant PRÉSENT avec
+// l'id le plus petit (élection déterministe — chaque client calcule la même chose sans
+// coordination) déclenche une réassignation côté serveur. La edge function revérifie
+// elle-même que l'hôte n'a pas changé entre-temps avant d'agir (voir action reassign_host).
+function checkHostPresence() {
+  if (!currentGameRoom || !gameRoomChannel) return;
+  const { room } = currentGameRoom;
+  if (room.status === "finished" || room.host_id === currentUser.id) {
+    currentGameRoom.hostAbsentSince = null;
+    return;
+  }
+  const present = new Set(Object.keys(gameRoomChannel.presenceState()));
+  if (present.has(room.host_id)) {
+    currentGameRoom.hostAbsentSince = null;
+    return;
+  }
+  if (!currentGameRoom.hostAbsentSince) {
+    currentGameRoom.hostAbsentSince = Date.now();
+    return;
+  }
+  if (Date.now() - currentGameRoom.hostAbsentSince < HOST_ABSENCE_GRACE_MS) return;
+  if (currentGameRoom.reassignTriggered) return;
+
+  const presentPlayerIds = currentGameRoom.players.map((p) => p.user_id).filter((id) => present.has(id));
+  const elected = [...presentPlayerIds].sort()[0];
+  if (elected !== currentUser.id) return; // pas à moi de déclencher
+
+  currentGameRoom.reassignTriggered = true;
+  callGameRoundFn("reassign_host", { room_id: room.id, believed_absent_host_id: room.host_id });
 }
 
 function clearRoundTimeout() {
@@ -4357,6 +4454,7 @@ function clearRoundTimeout() {
 
 function leaveGameRoomChannel() {
   clearRoundTimeout();
+  if (currentGameRoom?.presenceInterval) clearInterval(currentGameRoom.presenceInterval);
   if (gameRoomChannel) {
     sb.removeChannel(gameRoomChannel);
     gameRoomChannel = null;
@@ -4370,40 +4468,26 @@ async function leaveGameRoomForGood() {
   const wasHost = currentGameRoom.isHost;
   const areaEl = currentGameRoom.areaEl;
   await sb.from("game_room_players").delete().eq("room_id", roomId).eq("user_id", currentUser.id);
-  // l'hôte qui part clôt le salon : sans lui personne ne peut plus faire avancer les manches
-  if (wasHost) await sb.from("game_rooms").update({ status: "finished" }).eq("id", roomId);
+  // l'hôte qui part transfère la main à un autre participant plutôt que de clore le salon
+  // d'office (trust & safety, Phase 11) — la edge function elle-même clôt le salon si
+  // personne ne reste.
+  if (wasHost) await callGameRoundFn("leave_as_host", { room_id: roomId });
   leaveGameRoomChannel();
   if (areaEl) areaEl.innerHTML = "";
 }
 
-async function resetMyRoomScore() {
-  if (!currentGameRoom || !currentUser) return;
-  await sb
-    .from("game_room_players")
-    .update({ score: 0 })
-    .eq("room_id", currentGameRoom.room.id)
-    .eq("user_id", currentUser.id);
-}
-
 // Salon persistant : au lieu de clore le salon, l'hôte relance une AUTRE partie (même jeu ou
-// différent) sans faire repartir tout le monde — mêmes joueurs, même code. Chaque client
-// détecte le changement via game_generation (voir subscribeGameRoomChannel) et remet son
-// propre score à 0 (RLS : impossible de modifier le score des autres joueurs).
+// différent) sans faire repartir tout le monde — mêmes joueurs, même code. Passe par la edge
+// function game-round car remettre le score des AUTRES joueurs à 0 nécessite le rôle
+// service_role (RLS interdit désormais à un client de modifier le score de quelqu'un d'autre,
+// y compris le sien — voir trust & safety, Phase 11).
 async function startNewGameInRoom(newGameSlug) {
   if (!currentGameRoom?.isHost) return;
-  const room = currentGameRoom.room;
-  await sb
-    .from("game_rooms")
-    .update({
-      game_slug: newGameSlug,
-      status: "waiting",
-      current_round: 0,
-      current_question: null,
-      round_deadline: null,
-      total_rounds: ROOM_TOTAL_ROUNDS[newGameSlug] ?? 10,
-      game_generation: (room.game_generation ?? 1) + 1,
-    })
-    .eq("id", room.id);
+  await callGameRoundFn("start_new_game", {
+    room_id: currentGameRoom.room.id,
+    new_game_slug: newGameSlug,
+    total_rounds: ROOM_TOTAL_ROUNDS[newGameSlug] ?? 10,
+  });
 }
 
 async function startGameRoom() {
@@ -4474,16 +4558,25 @@ async function advanceGameRoomRound(roundNumber) {
   }
   if (room.game_slug === "pixel_guess") question.roundStartedAt = Date.now();
 
+  // La bonne réponse ne doit plus jamais transiter en clair par Realtime (trust & safety,
+  // Phase 11) : on la sépare ici et on passe par la edge function game-round, qui la stocke
+  // côté serveur (game_round_secrets, jamais lisible par un client) et ne publie dans
+  // game_rooms que la partie publique de la question.
+  const { questionPublic, secret } = splitRoomQuestion(room.game_slug, question);
+  if (room.game_slug === "guess_owner") currentGameRoom.hostSecretOwnerId = secret.ownerUserId;
+
   const windowMs = ROOM_ANSWER_WINDOW_MS[room.game_slug] ?? 20000;
-  await sb
-    .from("game_rooms")
-    .update({
-      status: "playing",
-      current_round: roundNumber,
-      current_question: question,
-      round_deadline: new Date(Date.now() + windowMs).toISOString(),
-    })
-    .eq("id", room.id);
+  const { error } = await callGameRoundFn("start_round", {
+    room_id: room.id,
+    round_number: roundNumber,
+    question_public: questionPublic,
+    secret,
+    window_ms: windowMs,
+  });
+  if (error) {
+    // repli : mieux vaut clore proprement le salon que de le laisser bloqué indéfiniment.
+    await sb.from("game_rooms").update({ status: "finished", current_question: null }).eq("id", room.id);
+  }
 }
 
 function renderGameRoom() {
@@ -4548,7 +4641,9 @@ function renderQuizRoomRound() {
       btn.type = "button";
       btn.className = "quiz-option-btn";
       btn.textContent = opt;
-      btn.onclick = () => submitRoomAnswer(opt, opt === question.correctAnswer);
+      // la bonne réponse n'est plus connue du client : le serveur (edge function game-round)
+      // la vérifie et calcule lui-même is_correct (trust & safety, Phase 11).
+      btn.onclick = () => submitRoomAnswer(opt);
       optionsWrap.appendChild(btn);
     });
   }
@@ -4680,17 +4775,25 @@ function renderPixelGuessRoomRound() {
       e.preventDefault();
       const guess = input.value.trim();
       if (!guess) return;
-      const correct = isCorrectGuess(guess, question.correctAnswer);
-      submitRoomAnswer(guess, correct, { lock: correct });
-      if (correct) {
-        feedback.className = "pixelguess-feedback correct";
-        feedback.textContent = "✅ Bonne réponse !";
-      } else {
-        feedback.className = "pixelguess-feedback incorrect";
-        feedback.textContent = "❌ Pas ça, retente !";
-        input.value = "";
-        input.focus();
-      }
+      const round = currentGameRoom.room.current_round;
+      // la bonne réponse n'est plus connue du client : on envoie l'hypothèse au serveur (edge
+      // function game-round), qui la vérifie et renvoie is_correct — d'où le petit temps de
+      // réponse réseau avant l'affichage "✅/❌" (léger changement d'UX, contrepartie
+      // nécessaire pour ne plus exposer la réponse en clair, trust & safety Phase 11).
+      submitRoomAnswer(guess, { lock: false }).then((result) => {
+        if (!currentGameRoom || currentGameRoom.room.current_round !== round) return;
+        if (result?.is_correct) {
+          currentGameRoom.myAnswerRound = round;
+          feedback.className = "pixelguess-feedback correct";
+          feedback.textContent = "✅ Bonne réponse !";
+          renderGameRoom();
+        } else {
+          feedback.className = "pixelguess-feedback incorrect";
+          feedback.textContent = "❌ Pas ça, retente !";
+          input.value = "";
+          input.focus();
+        }
+      });
     };
   }
 
@@ -4698,26 +4801,37 @@ function renderPixelGuessRoomRound() {
   areaEl.appendChild(wrapper);
 }
 
-async function submitRoomAnswer(answer, isCorrect, { lock = true } = {}) {
-  if (!currentGameRoom) return;
+// N'accepte plus de paramètre isCorrect : c'est désormais la edge function game-round qui
+// vérifie la réponse contre le secret de la manche et calcule elle-même is_correct/le score
+// (trust & safety, Phase 11) — le client ne peut plus les déclarer lui-même. `lock` distingue
+// toujours un jeu à réponse unique (QCM/vote, verrouille dès l'envoi) d'un jeu à essais
+// multiples (Pixel Guess, ne verrouille qu'en cas de bonne réponse confirmée par le serveur).
+async function submitRoomAnswer(answer, { lock = true } = {}) {
+  if (!currentGameRoom) return null;
   const round = currentGameRoom.room.current_round;
-  if (currentGameRoom.myAnswerRound === round) return;
+  if (currentGameRoom.myAnswerRound === round) return null;
   if (lock) {
     currentGameRoom.myAnswerRound = round;
     renderGameRoom();
   }
-  await sb.from("game_room_answers").insert({
+  const { data, error } = await callGameRoundFn("submit_answer", {
     room_id: currentGameRoom.room.id,
     round_number: round,
-    user_id: currentUser.id,
     answer,
-    is_correct: isCorrect,
   });
+  if (error) return null;
+  return data;
 }
 
+// Le score est désormais entièrement attribué côté serveur au moment de submit_answer (voir
+// la edge function game-round) — ce handler ne sert plus qu'à détecter, côté hôte, quand la
+// manche doit avancer (il reste déclenché par Realtime sur chaque réponse insérée, quel que
+// soit qui l'a insérée : la edge function utilise la clé service_role mais la ligne reste
+// visible via postgres_changes comme n'importe quelle autre insertion).
 async function handleRoomAnswerInsert(answerRow) {
   if (!currentGameRoom || answerRow.room_id !== currentGameRoom.room.id) return;
   if (answerRow.round_number !== currentGameRoom.room.current_round) return;
+  if (!currentGameRoom.isHost || currentGameRoom.advancingRound) return;
 
   const { data: roundAnswers } = await sb
     .from("game_room_answers")
@@ -4729,59 +4843,36 @@ async function handleRoomAnswerInsert(answerRow) {
   const gameSlug = currentGameRoom.room.game_slug;
   const firstCorrect = (roundAnswers ?? []).find((a) => a.is_correct);
 
+  let shouldAdvance;
   if (gameSlug === "guess_owner") {
-    // Vote : pas de "premier arrivé" — TOUS les joueurs qui ont voté juste marquent un point,
-    // chacun s'auto-attribue le sien dès que sa propre réponse arrive (comme les autres jeux,
-    // chaque client ne peut mettre à jour que sa propre ligne game_room_players, RLS oblige).
-    const myAnswer = (roundAnswers ?? []).find((a) => a.user_id === currentUser.id);
-    if (myAnswer?.is_correct && !currentGameRoom.pointAwardedThisRound) {
-      currentGameRoom.pointAwardedThisRound = true;
-      const me = currentGameRoom.players.find((p) => p.user_id === currentUser.id);
-      if (me) {
-        await sb
-          .from("game_room_players")
-          .update({ score: me.score + 1 })
-          .eq("room_id", currentGameRoom.room.id)
-          .eq("user_id", currentUser.id);
-      }
-    }
-  } else if (firstCorrect && firstCorrect.user_id === currentUser.id && !currentGameRoom.pointAwardedThisRound) {
-    currentGameRoom.pointAwardedThisRound = true;
-    const me = currentGameRoom.players.find((p) => p.user_id === currentUser.id);
-    if (me) {
-      await sb
-        .from("game_room_players")
-        .update({ score: me.score + 1 })
-        .eq("room_id", currentGameRoom.room.id)
-        .eq("user_id", currentUser.id);
-    }
-  }
-
-  if (currentGameRoom.isHost && !currentGameRoom.advancingRound) {
-    let shouldAdvance;
-    if (gameSlug === "guess_owner") {
-      // le propriétaire de l'objet ne vote pas (ce serait un point gratuit) : on attend que
-      // tous les AUTRES joueurs aient voté, pas lui.
-      const ownerUserId = currentGameRoom.room.current_question?.ownerUserId;
+    // le propriétaire de l'objet ne vote pas (ce serait un point gratuit) : on attend que
+    // tous les AUTRES joueurs aient voté, pas lui. ownerUserId n'est connu QUE de l'hôte qui a
+    // construit la manche (jamais diffusé publiquement, voir splitRoomQuestion) — s'il manque
+    // (hôte tout juste réassigné en cours de manche), on se rabat sur le filet de sécurité par
+    // délai plutôt que de deviner.
+    const ownerUserId = currentGameRoom.hostSecretOwnerId;
+    if (ownerUserId == null) {
+      shouldAdvance = false;
+    } else {
       const expectedVoters = currentGameRoom.players.filter((p) => p.user_id !== ownerUserId).length;
       const answeredUserIds = new Set((roundAnswers ?? []).map((a) => a.user_id));
       shouldAdvance = answeredUserIds.size >= expectedVoters;
-    } else if (gameSlug === "pixel_guess") {
-      // "tout le monde a répondu" ne s'applique pas à la réponse libre (Pixel Guess) : un
-      // joueur peut soumettre plusieurs hypothèses fausses sans avoir fini sa manche — on ne
-      // se base alors que sur la bonne réponse ou sur le filet de sécurité par délai (voir
-      // subscribeGameRoomChannel).
-      shouldAdvance = !!firstCorrect;
-    } else {
-      const answeredUserIds = new Set((roundAnswers ?? []).map((a) => a.user_id));
-      shouldAdvance = !!firstCorrect || answeredUserIds.size >= currentGameRoom.players.length;
     }
-    if (shouldAdvance) {
-      currentGameRoom.advancingRound = true;
-      setTimeout(() => {
-        if (currentGameRoom) advanceGameRoomRound(currentGameRoom.room.current_round + 1);
-      }, 2500);
-    }
+  } else if (gameSlug === "pixel_guess") {
+    // "tout le monde a répondu" ne s'applique pas à la réponse libre (Pixel Guess) : un
+    // joueur peut soumettre plusieurs hypothèses fausses sans avoir fini sa manche — on ne
+    // se base alors que sur la bonne réponse ou sur le filet de sécurité par délai (voir
+    // subscribeGameRoomChannel).
+    shouldAdvance = !!firstCorrect;
+  } else {
+    const answeredUserIds = new Set((roundAnswers ?? []).map((a) => a.user_id));
+    shouldAdvance = !!firstCorrect || answeredUserIds.size >= currentGameRoom.players.length;
+  }
+  if (shouldAdvance) {
+    currentGameRoom.advancingRound = true;
+    setTimeout(() => {
+      if (currentGameRoom) advanceGameRoomRound(currentGameRoom.room.current_round + 1);
+    }, 2500);
   }
 }
 
@@ -5049,11 +5140,27 @@ function buildGuessOwnerQuestion(pool, players) {
   };
 }
 
+// L'identité du propriétaire (ownerUserId) n'est plus publiée dans current_question (c'était
+// la fuite la plus directe de ce jeu — la "bonne réponse" du vote — trust & safety Phase 11) :
+// on demande au serveur, une seule fois par manche, si l'appelant EST le propriétaire (et lui
+// seul reçoit la réponse). Mis en cache par manche pour ne pas rappeler à chaque re-rendu.
+async function ensureGuessOwnerRoundInfo(round) {
+  if (!currentGameRoom) return false;
+  if (currentGameRoom.ownerInfoRound === round) return currentGameRoom.ownerInfoIsOwner;
+  const { data } = await callGameRoundFn("am_i_owner", {
+    room_id: currentGameRoom.room.id,
+    round_number: round,
+  });
+  if (!currentGameRoom || currentGameRoom.room.current_round !== round) return false;
+  currentGameRoom.ownerInfoRound = round;
+  currentGameRoom.ownerInfoIsOwner = !!data?.is_owner;
+  return currentGameRoom.ownerInfoIsOwner;
+}
+
 function renderGuessOwnerRound() {
   const { room, players, areaEl } = currentGameRoom;
   const question = room.current_question;
   const myAnswered = currentGameRoom.myAnswerRound === room.current_round;
-  const isOwner = question?.ownerUserId === currentUser.id;
 
   const wrapper = document.createElement("div");
   wrapper.className = "quiz-round";
@@ -5071,24 +5178,29 @@ function renderGuessOwnerRound() {
   `;
   const optionsWrap = wrapper.querySelector(".quiz-options");
   const statusEl = wrapper.querySelector(".room-answer-status");
-
-  if (isOwner) {
-    statusEl.textContent = "C'est ton objet ! Patiente pendant que les autres devinent...";
-  } else if (myAnswered) {
-    statusEl.textContent = "Vote envoyé, en attente des autres joueurs...";
-  } else if (question) {
-    question.candidates.forEach((c) => {
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.className = "quiz-option-btn";
-      btn.textContent = c.displayName;
-      btn.onclick = () => submitRoomAnswer(c.userId, c.userId === question.ownerUserId);
-      optionsWrap.appendChild(btn);
-    });
-  }
-
   areaEl.innerHTML = "";
   areaEl.appendChild(wrapper);
+
+  const round = room.current_round;
+  ensureGuessOwnerRoundInfo(round).then((isOwner) => {
+    if (!currentGameRoom || currentGameRoom.room.current_round !== round) return; // manche déjà passée entre-temps
+    if (isOwner) {
+      statusEl.textContent = "C'est ton objet ! Patiente pendant que les autres devinent...";
+    } else if (myAnswered) {
+      statusEl.textContent = "Vote envoyé, en attente des autres joueurs...";
+    } else if (question) {
+      question.candidates.forEach((c) => {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "quiz-option-btn";
+        btn.textContent = c.displayName;
+        // la bonne réponse (qui est le propriétaire) n'est plus connue du client : le serveur
+        // la vérifie et calcule lui-même is_correct.
+        btn.onclick = () => submitRoomAnswer(c.userId);
+        optionsWrap.appendChild(btn);
+      });
+    }
+  });
 }
 
 // ---------- helpers ----------
