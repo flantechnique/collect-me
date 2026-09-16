@@ -256,7 +256,16 @@
 
       <div class="stats-section">
         <h3>🕵️ C'est à qui ça ?</h3>
-        <p class="empty">Devine à qui appartient cet objet, parmi tes amis. Bientôt disponible.</p>
+        <p class="empty">Devine à qui appartient l'objet affiché, parmi les joueurs du salon. Jeu multijoueur uniquement (pas de mode solo).</p>
+        <div class="minigame-actions">
+          <button type="button" id="guessowner-multi-ranked-btn">🏆 Créer un salon classé</button>
+          <button type="button" id="guessowner-multi-casual-btn">🎈 Créer un salon amical (non classé)</button>
+          <div class="minigame-join-row">
+            <input type="text" id="guessowner-join-code" placeholder="Code du salon" maxlength="6" autocomplete="off" />
+            <button type="button" id="guessowner-join-btn">Rejoindre</button>
+          </div>
+        </div>
+        <div id="guessowner-area"></div>
       </div>
     </section>
 
