@@ -51,7 +51,7 @@
         <div id="global-search-results" class="dropdown-results" hidden></div>
       </div>
       <div id="home-resume" class="home-resume-block" hidden>
-        <h3>👋 Reprendre où j'en étais</h3>
+        <h3>🆕 Mes derniers ajouts</h3>
         <div id="home-resume-content" class="home-resume-content"></div>
       </div>
 
@@ -63,8 +63,15 @@
         <button type="button" id="home-minigames-tile-btn">Jouer</button>
       </div>
 
-      <h2>Que veux-tu consulter aujourd'hui ?</h2>
-      <div id="home-categories"></div>
+      <div class="stats-section home-activity-block">
+        <h3>📡 L'actualité de la collection</h3>
+        <div class="toggle-group" id="home-activity-tabs">
+          <button type="button" class="tab active" data-value="popular">🔥 Populaire (24h)</button>
+          <button type="button" class="tab" data-value="friends">👥 Mes amis</button>
+          <button type="button" class="tab" data-value="artists">🎨 Artistes suivis</button>
+        </div>
+        <div id="home-activity-content"></div>
+      </div>
     </section>
 
     <section id="catalogue-view" hidden>
@@ -163,12 +170,28 @@
         <button id="stats-export-json-btn" type="button">⬇️ Exporter en JSON</button>
         <button id="stats-export-reimport-btn" type="button" title="Un fichier par catégorie, au format exact du modèle d'import — pour ré-importer telle quelle ailleurs">⬇️ Export réimportable</button>
       </div>
+
+      <div class="stats-section">
+        <h3>📊 Mon année en collection</h3>
+        <button id="wrapped-generate-btn" type="button">Générer mon récap</button>
+        <div id="wrapped-content"></div>
+      </div>
+
+      <div class="stats-section">
+        <h3>🕰️ Frise chronologique</h3>
+        <div id="timeline-content"></div>
+      </div>
     </section>
 
     <section id="fun-view" hidden>
       <h2>Découvrir ma collection</h2>
 
       <p class="empty fun-account-hint">Pseudo, photo de profil, bio et vitrine publique se gèrent maintenant depuis <button id="fun-account-link" type="button" class="link-btn">Mon compte</button>.</p>
+
+      <div class="stats-section">
+        <h3>🗂️ Parcourir les catégories</h3>
+        <div id="discover-categories"></div>
+      </div>
 
       <div id="on-this-day-section" class="stats-section" hidden>
         <h3>📅 Ce jour-là</h3>
@@ -181,35 +204,8 @@
       </div>
 
       <div class="stats-section">
-        <h3>💸 Alertes wantlist</h3>
-        <div id="wantlist-alerts-content"></div>
-      </div>
-
-      <div class="stats-section">
-        <h3>🤜🤛 Duel avec un ami</h3>
-        <p class="empty">Colle le lien de vitrine (ou l'identifiant/pseudo) d'un·e ami·e ayant activé sa vitrine publique.</p>
-        <div class="compare-row">
-          <input id="compare-input" type="text" placeholder="Lien, pseudo ou identifiant de vitrine..." autocomplete="off" />
-          <button id="compare-btn" type="button">Comparer</button>
-        </div>
-        <div id="compare-summary"></div>
-        <div id="compare-result"></div>
-      </div>
-
-      <div class="stats-section">
         <h3>💡 Si tu as aimé...</h3>
         <div id="recommendations-content"></div>
-      </div>
-
-      <div class="stats-section">
-        <h3>📊 Mon année en collection</h3>
-        <button id="wrapped-generate-btn" type="button">Générer mon récap</button>
-        <div id="wrapped-content"></div>
-      </div>
-
-      <div class="stats-section">
-        <h3>🕰️ Frise chronologique</h3>
-        <div id="timeline-content"></div>
       </div>
 
       <div class="stats-section">
@@ -246,6 +242,17 @@
           </div>
         </div>
         <div id="minigames-leaderboard-content"></div>
+      </div>
+
+      <div class="stats-section">
+        <h3>🤜🤛 Duel avec un ami</h3>
+        <p class="empty">Colle le lien de vitrine (ou l'identifiant/pseudo) d'un·e ami·e ayant activé sa vitrine publique.</p>
+        <div class="compare-row">
+          <input id="compare-input" type="text" placeholder="Lien, pseudo ou identifiant de vitrine..." autocomplete="off" />
+          <button id="compare-btn" type="button">Comparer</button>
+        </div>
+        <div id="compare-summary"></div>
+        <div id="compare-result"></div>
       </div>
 
       <div class="stats-section">
