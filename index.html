@@ -52,6 +52,7 @@
     <button id="view-stats">Statistiques</button>
     <button id="view-fun">Découvrir</button>
     <button id="view-minigames">🕹️ Mini-jeux</button>
+    <button id="view-playlists">📃 Mes listes</button>
   </nav>
 
   <main>
@@ -539,6 +540,86 @@
       <div class="stats-section">
         <h3>📚 Collection</h3>
         <div id="showcase-content"></div>
+      </div>
+    </section>
+
+    <section id="playlists-view" hidden>
+      <div id="playlists-list-panel">
+        <div class="catalogue-toolbar">
+          <button id="playlist-create-toggle-btn" type="button">➕ Nouvelle liste</button>
+          <input id="playlist-join-code-input" type="text" placeholder="Code d'invitation..." autocomplete="off" maxlength="6" />
+          <button id="playlist-join-btn" type="button">🔗 Rejoindre</button>
+        </div>
+        <p id="playlist-join-status" class="empty" hidden></p>
+
+        <form id="playlist-create-form" hidden>
+          <label class="full-width">Nom de la liste
+            <input id="playlist-create-name" name="name" required placeholder="Mes indispensables, À faire découvrir..." />
+          </label>
+          <label class="full-width">Description (optionnelle)
+            <textarea id="playlist-create-description" name="description"></textarea>
+          </label>
+          <label class="full-width showcase-toggle">
+            <input type="checkbox" id="playlist-create-public" name="is_public" />
+            🌍 Rendre publique (consultable via un lien, sans connexion)
+          </label>
+          <div class="actions">
+            <button type="submit">Créer</button>
+            <button type="button" id="playlist-create-cancel-btn" class="cancel-btn">Annuler</button>
+          </div>
+        </form>
+
+        <h3>Mes listes</h3>
+        <div id="playlists-owned-list"><p class="empty">Chargement...</p></div>
+        <h3>Listes rejointes</h3>
+        <div id="playlists-member-list"><p class="empty">Chargement...</p></div>
+      </div>
+
+      <div id="playlist-detail-panel" hidden>
+        <button id="playlist-detail-back-btn" type="button" class="tab">← Toutes mes listes</button>
+        <div class="showcase-header">
+          <div>
+            <h2 id="playlist-detail-name"></h2>
+            <p id="playlist-detail-description" class="empty" hidden></p>
+          </div>
+          <div id="playlist-detail-owner-actions" hidden>
+            <button id="playlist-toggle-public-btn" type="button"></button>
+            <button id="playlist-delete-btn" type="button">🗑️ Supprimer la liste</button>
+          </div>
+          <button id="playlist-leave-btn" type="button" hidden>🚪 Quitter la liste</button>
+        </div>
+
+        <div id="playlist-share-row" class="stats-section" hidden>
+          <h3>🤝 Partage &amp; collaboration</h3>
+          <div id="playlist-public-link-row" hidden>
+            <input id="playlist-public-link-input" type="text" readonly />
+            <button id="playlist-public-link-copy-btn" type="button">Copier le lien</button>
+          </div>
+          <p>Code d'invitation (pour ajouter des contributeurs) : <strong id="playlist-invite-code"></strong>
+            <button id="playlist-invite-code-copy-btn" type="button">Copier</button>
+          </p>
+          <p id="playlist-members-list" class="empty"></p>
+        </div>
+
+        <div id="playlist-add-item-wrapper" class="search-wrapper">
+          <input id="playlist-add-item-input" type="text" placeholder="🔍 Ajouter un item du catalogue à la liste..." autocomplete="off" />
+          <div id="playlist-add-item-results" class="dropdown-results" hidden></div>
+        </div>
+
+        <div id="playlist-detail-items" class="pokedex-grid"></div>
+      </div>
+    </section>
+
+    <section id="playlist-public-view" hidden>
+      <div class="showcase-header">
+        <div>
+          <h2 id="playlist-public-name">Liste</h2>
+          <p id="playlist-public-description" class="empty" hidden></p>
+        </div>
+        <a href="./" class="tab">← Retour à Glanure</a>
+      </div>
+      <div class="stats-section">
+        <div id="playlist-public-content"></div>
       </div>
     </section>
 
