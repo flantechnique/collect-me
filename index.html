@@ -4,6 +4,13 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Glanure</title>
+  <script>
+    // Appliqué avant le CSS pour éviter un flash du mauvais thème au chargement.
+    try {
+      var t = localStorage.getItem("glanure-theme");
+      if (t === "dark" || t === "light") document.documentElement.dataset.theme = t;
+    } catch (e) {}
+  </script>
   <link rel="manifest" href="manifest.webmanifest" />
   <meta name="theme-color" content="#c96a3f" />
   <link rel="icon" href="assets/icon-192.png" />
@@ -22,6 +29,7 @@
   <header>
     <h1 id="brand-logo" role="button" tabindex="0"><img src="assets/logo-mark.png" alt="" class="brand-logo-icon" />Glanure</h1>
     <div class="header-right">
+      <button id="theme-toggle-btn" type="button" class="theme-toggle-btn" aria-label="Changer de thème" title="Changer de thème">🌓</button>
       <div id="notifications-area" class="notifications-area" hidden>
         <button id="notifications-bell-btn" type="button" class="notifications-bell" aria-label="Notifications">
           🔔<span id="notifications-badge" class="notifications-badge" hidden>0</span>
@@ -147,9 +155,11 @@
       <div class="catalogue-toolbar">
         <input id="collection-search" type="text" placeholder="Rechercher dans ma collection..." autocomplete="off" />
         <select id="collection-filter"></select>
+        <button id="collection-loaned-filter-btn" type="button">🤝 Prêtés</button>
         <button id="collection-view-toggle" type="button">🎴 Vue Pokédex</button>
         <button id="collection-print-labels-btn" type="button">🖨️ Étiquettes</button>
       </div>
+      <div id="tcg-set-progress" class="tcg-set-progress" hidden></div>
       <div id="collection-bulk-bar" class="collection-bulk-bar" hidden>
         <span id="collection-bulk-count"></span>
         <select id="collection-bulk-status">
@@ -512,6 +522,12 @@
       <div id="showcase-forsale-section" class="stats-section" hidden>
         <h3>🛒 À vendre</h3>
         <div id="showcase-forsale-content"></div>
+      </div>
+
+      <div id="showcase-wishlist-section" class="stats-section" hidden>
+        <h3>🎁 Idées cadeaux</h3>
+        <p id="showcase-wishlist-own-note" class="empty" hidden>Visible publiquement — tu ne peux pas voir si un item a été réservé, pour préserver la surprise.</p>
+        <div id="showcase-wishlist-content"></div>
       </div>
 
       <div id="showcase-activity-section" class="stats-section" hidden>
