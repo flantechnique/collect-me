@@ -445,6 +445,21 @@
       </div>
 
       <div class="stats-section">
+        <h3>💿 Import Discogs</h3>
+        <p class="empty">Importe en une fois toute ta collection Vinyles/CD depuis un compte Discogs existant (la collection doit être publique côté Discogs : Paramètres → Confidentialité).</p>
+        <form id="account-discogs-import-form">
+          <label>
+            Pseudo Discogs
+            <input id="account-discogs-username-input" type="text" placeholder="ex : rateyourmusic_fan" autocomplete="off" required />
+          </label>
+          <div class="actions">
+            <button type="submit">⬇️ Importer ma collection Discogs</button>
+          </div>
+        </form>
+        <p id="account-discogs-import-status" class="empty" hidden></p>
+      </div>
+
+      <div class="stats-section">
         <h3>🔐 Connexion &amp; mot de passe</h3>
         <p id="account-auth-methods" class="empty"></p>
         <form id="account-password-form">
