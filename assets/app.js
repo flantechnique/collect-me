@@ -371,6 +371,28 @@ function itemYear(item) {
   return Number.isFinite(year) ? year : null;
 }
 
+// ---------- valeur estimée (Phase 11 point 4) ----------
+// "Prix neuf" automatique capturé au moment de l'ajout au catalogue (voir discogs-search
+// et tcg-search) — un instantané, pas une cote qui se met à jour toute seule. Affiché sous
+// forme de repère indicatif, jamais comme une valeur de revente garantie. Devises non
+// converties (pas d'API de change branchée) : affichées telles que fournies par la source.
+function estimatedValueLabel(item) {
+  const amount = item.attributes?.estimated_value_amount;
+  if (amount == null) return null;
+  const currency = item.attributes?.estimated_value_currency;
+  const symbol = currency === "EUR" ? "€" : currency === "USD" ? "$" : "";
+  return `≈ ${Number(amount).toFixed(2)} ${symbol}`.trim();
+}
+
+// Agrégat multi-devises pour les stats (pas de conversion de change — pas d'API de taux
+// branchée — donc on additionne séparément par devise plutôt que de mélanger les montants).
+function formatMixedCurrencyValue(eur, usd) {
+  const parts = [];
+  if (eur) parts.push(`${eur.toFixed(2)} €`);
+  if (usd) parts.push(`${usd.toFixed(2)} $`);
+  return parts.length ? `≈ ${parts.join(" + ")}` : "—";
+}
+
 function creatorIcon(cat) {
   if (cat.slug === "book") return "✍️";
   if (cat.slug === "video_game") return "🏢";
@@ -998,6 +1020,14 @@ function renderItemCard(item, cat) {
   });
   info.appendChild(attrs);
 
+  const value = estimatedValueLabel(item);
+  if (value) {
+    const valueEl = document.createElement("p");
+    valueEl.className = "estimated-value";
+    valueEl.textContent = `💰 Valeur estimée : ${value}`;
+    info.appendChild(valueEl);
+  }
+
   body.appendChild(info);
   card.appendChild(body);
 
@@ -1196,6 +1226,7 @@ function renderCollectionPokedex(groups) {
 function renderCollectionGroup(group) {
   const { item, status, entryIds } = group;
   const key = `${item.id}:${status}`;
+  const value = estimatedValueLabel(item);
   const card = document.createElement("div");
   card.className = "card";
   card.innerHTML = `
@@ -1206,6 +1237,7 @@ function renderCollectionGroup(group) {
         <h3>${item.categories.icon ?? ""} ${escapeHtml(item.title)}</h3>
         <p class="status status-${status}">${statusLabel(status)}</p>
         <p class="collection-qty">${entryIds.length} exemplaire${entryIds.length > 1 ? "s" : ""}</p>
+        ${value ? `<p class="estimated-value">💰 Valeur estimée : ${escapeHtml(value)}</p>` : ""}
       </div>
     </div>
   `;
@@ -1975,6 +2007,11 @@ async function bulkImportTcgCards(status, triggerBtn) {
           ...(c.card_number && { card_number: c.card_number }),
           ...(c.rarity && { rarity: c.rarity }),
           ...(c.year && { year: c.year }),
+          // "prix neuf" automatique (Phase 11 point 4), même source que l'ajout carte-par-carte
+          ...(c.estimated_value_amount != null && {
+            estimated_value_amount: c.estimated_value_amount,
+            estimated_value_currency: c.estimated_value_currency,
+          }),
         },
         source: "external_api",
         created_by: currentUser.id,
@@ -2328,6 +2365,13 @@ function renderStats(entries) {
   let spentCount = 0;
   const byYear = new Map(); // année -> nombre d'acquisitions
 
+  // ---- valeur estimée (Phase 11 point 4) : prix payé renseigné en priorité, sinon repli
+  // sur le "prix neuf" automatique du catalogue (voir estimatedValueLabel) — seulement pour
+  // ce qu'on possède réellement (owned/for_sale), pas les items juste "recherchés".
+  let estimatedValueEUR = 0;
+  let estimatedValueUSD = 0;
+  let estimatedValueCount = 0;
+
   entries.forEach((e) => {
     byStatus[e.status] = (byStatus[e.status] ?? 0) + 1;
     const catName = e.items.categories.name;
@@ -2341,6 +2385,19 @@ function renderStats(entries) {
       const year = e.acquired_at.slice(0, 4);
       byYear.set(year, (byYear.get(year) ?? 0) + 1);
     }
+    if (e.status === "owned" || e.status === "for_sale") {
+      if (e.price_paid != null) {
+        estimatedValueEUR += Number(e.price_paid); // prix payé toujours traité en € dans l'app
+        estimatedValueCount++;
+      } else {
+        const amount = e.items.attributes?.estimated_value_amount;
+        if (amount != null) {
+          if (e.items.attributes?.estimated_value_currency === "USD") estimatedValueUSD += Number(amount);
+          else estimatedValueEUR += Number(amount);
+          estimatedValueCount++;
+        }
+      }
+    }
   });
 
   // ---- cartes résumé ----
@@ -2353,6 +2410,10 @@ function renderStats(entries) {
     [byStatus.wanted, "Recherchés"],
     [byStatus.for_sale, "À vendre"],
     [spentCount ? `${totalSpent.toFixed(2)} €` : "—", "Dépensé (renseigné)"],
+    [
+      estimatedValueCount ? formatMixedCurrencyValue(estimatedValueEUR, estimatedValueUSD) : "—",
+      "Valeur estimée (possédés)",
+    ],
   ];
   summary.forEach(([value, label]) => {
     const card = document.createElement("div");
@@ -5773,6 +5834,12 @@ async function addDetailToCollection(status) {
       ...(year && { pressing_year: year }),
       ...(format && { format }),
       ...(detail.genre && { genre: detail.genre }),
+      // "prix neuf" automatique (Phase 11 point 4) : cote basse du marketplace Discogs au
+      // moment de l'ajout — un instantané, pas une valeur qui se met à jour toute seule.
+      ...(detail.lowest_price != null && {
+        estimated_value_amount: detail.lowest_price,
+        estimated_value_currency: "USD",
+      }),
     };
     coverImageUrl = activeVersion?.thumb ?? detail.cover_image ?? null;
   } else if (cat.slug === "video_game") {
@@ -5818,6 +5885,12 @@ async function addDetailToCollection(status) {
       ...(detail.card_number && { card_number: detail.card_number }),
       ...(detail.rarity && { rarity: detail.rarity }),
       ...(detail.year && { year: detail.year }),
+      // "prix neuf" automatique (Phase 11 point 4) : prix marché (Cardmarket/TCGPlayer selon
+      // disponibilité, voir tcg-search) au moment de l'ajout, même logique que pour les disques.
+      ...(detail.estimated_value_amount != null && {
+        estimated_value_amount: detail.estimated_value_amount,
+        estimated_value_currency: detail.estimated_value_currency,
+      }),
     };
     coverImageUrl = detail.cover_image ?? null;
   }
