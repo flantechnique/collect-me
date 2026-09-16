@@ -1721,6 +1721,7 @@ async function loadMyCollection() {
       if (Object.values(r.items.attributes || {}).some((v) => String(v).toLowerCase().includes(q))) return true;
       if (r.condition && r.condition.toLowerCase().includes(q)) return true;
       if (r.notes && r.notes.toLowerCase().includes(q)) return true;
+      if (r.storage_location && r.storage_location.toLowerCase().includes(q)) return true;
       return false;
     });
   }
@@ -1742,11 +1743,13 @@ async function loadMyCollection() {
   rows.forEach((entry) => {
     const key = `${entry.item_id}:${entry.status}`;
     if (!groups.has(key)) {
-      groups.set(key, { item: entry.items, status: entry.status, entryIds: [], loans: [] });
+      groups.set(key, { item: entry.items, status: entry.status, entryIds: [], loans: [], locations: [], ratings: [] });
     }
     const group = groups.get(key);
     group.entryIds.push(entry.id);
     if (entry.loaned_to) group.loans.push(entry.loaned_to);
+    if (entry.storage_location && !group.locations.includes(entry.storage_location)) group.locations.push(entry.storage_location);
+    if (entry.personal_rating) group.ratings.push(entry.personal_rating);
   });
 
   if (showLoanedOnly) {
@@ -1817,11 +1820,14 @@ function renderCollectionPokedex(groups) {
 }
 
 function renderCollectionGroup(group) {
-  const { item, status, entryIds, loans } = group;
+  const { item, status, entryIds, loans, locations, ratings } = group;
   const key = `${item.id}:${status}`;
   const value = estimatedValueLabel(item);
   const loanLabel = !loans?.length ? "" :
     loans.length === 1 ? `🤝 Prêté à ${escapeHtml(loans[0])}` : `🤝 ${loans.length} exemplaires prêtés`;
+  const locationLabel = !locations?.length ? "" : `📍 ${escapeHtml(locations.join(", "))}`;
+  const avgRating = ratings?.length ? Math.round(ratings.reduce((a, b) => a + b, 0) / ratings.length) : 0;
+  const ratingLabel = avgRating ? "⭐".repeat(avgRating) : "";
   const card = document.createElement("div");
   card.className = "card";
   card.innerHTML = `
@@ -1834,6 +1840,8 @@ function renderCollectionGroup(group) {
         <p class="collection-qty">${entryIds.length} exemplaire${entryIds.length > 1 ? "s" : ""}</p>
         ${value ? `<p class="estimated-value">💰 Valeur estimée : ${escapeHtml(value)}</p>` : ""}
         ${loanLabel ? `<p class="loan-badge">${loanLabel}</p>` : ""}
+        ${locationLabel ? `<p class="storage-location">${locationLabel}</p>` : ""}
+        ${ratingLabel ? `<p class="personal-rating">${ratingLabel}</p>` : ""}
       </div>
     </div>
   `;
@@ -1990,6 +1998,22 @@ async function toggleEntryDetailsForm(card, entryId) {
     <label>Depuis le
       <input name="loaned_at" type="date" value="${entry.loaned_at ?? ""}" />
     </label>` : ""}
+    <label>📍 Emplacement physique
+      <input name="storage_location" placeholder="Étagère salon, Carton 3..." value="${escapeHtml(entry.storage_location ?? "")}" />
+    </label>
+    <label>⭐ Ma note
+      <select name="personal_rating">
+        <option value="">Pas de note</option>
+        ${[1, 2, 3, 4, 5].map((n) => `<option value="${n}" ${entry.personal_rating === n ? "selected" : ""}>${"⭐".repeat(n)}</option>`).join("")}
+      </select>
+    </label>
+    <label class="full-width">Mon avis
+      <textarea name="personal_review" placeholder="Ton avis personnel sur cet exemplaire...">${escapeHtml(entry.personal_review ?? "")}</textarea>
+    </label>
+    ${entry.status === "owned" ? `<label class="full-width showcase-toggle">
+      <input type="checkbox" name="showcase_hidden" ${entry.showcase_hidden ? "checked" : ""} />
+      🙈 Masquer cet exemplaire de ma vitrine publique (même si la vitrine est activée dans Paramètres)
+    </label>` : ""}
     <label class="full-width">Notes
       <textarea name="notes">${escapeHtml(entry.notes ?? "")}</textarea>
     </label>
@@ -2050,6 +2074,10 @@ async function toggleEntryDetailsForm(card, entryId) {
         } : {}),
         acquired_at: fd.get("acquired_at") || null,
         notes: fd.get("notes")?.trim() || null,
+        storage_location: fd.get("storage_location")?.trim() || null,
+        personal_rating: fd.get("personal_rating") || null,
+        personal_review: fd.get("personal_review")?.trim() || null,
+        ...(entry.status === "owned" ? { showcase_hidden: fd.get("showcase_hidden") === "on" } : {}),
         ...(entry.status !== "wanted" ? {
           loaned_to: loanedTo,
           // pas de destinataire = prêt terminé (ou jamais démarré) → on efface aussi la date ;
