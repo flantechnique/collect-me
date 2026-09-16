@@ -8,6 +8,12 @@
   --accent-hover: #b35a32;
   --accent-soft: #f3ddc9;
   --border: #e4d3b4;
+  /* Teinte dédiée à la zone Mini-jeux (retour utilisateur : la faire ressortir du reste de
+     l'app plutôt que de se fondre dans le thème "gestion de collection"). Violet choisi pour
+     contraster franchement avec la terracotta utilisée partout ailleurs. */
+  --game-accent: #6c5ce7;
+  --game-accent-hover: #5b4bd1;
+  --game-accent-soft: #eae6fb;
 }
 
 * { box-sizing: border-box; }
@@ -134,6 +140,34 @@ nav.main-nav button.active, .tab.active, #collection-view-toggle.active {
   background: var(--accent);
   border-color: var(--accent);
   color: #fff8f0;
+}
+
+/* ---------- Mini-jeux : zone visuellement distincte du reste de l'app ----------
+   Retour utilisateur (test mobile) : les jeux doivent se démarquer de la gestion de
+   collection. Plutôt que de dupliquer chaque règle de couleur, on ré-affecte les variables
+   --accent/--accent-hover/--accent-soft à l'intérieur du sous-arbre #minigames-view : tous
+   les styles déjà écrits ailleurs avec var(--accent) (boutons, onglets actifs, classement,
+   code de salon...) héritent automatiquement la teinte violette sans rien réécrire. */
+#minigames-view {
+  --accent: var(--game-accent);
+  --accent-hover: var(--game-accent-hover);
+  --accent-soft: var(--game-accent-soft);
+  background: linear-gradient(180deg, var(--game-accent-soft) 0%, rgba(234, 230, 251, 0) 260px);
+  margin: 0 -1.75rem;
+  padding: 1.5rem 1.75rem 2rem;
+  border-radius: 0 0 28px 28px;
+}
+
+nav.main-nav button#view-minigames {
+  background: var(--game-accent-soft);
+  border-color: var(--game-accent);
+  color: var(--game-accent-hover);
+}
+nav.main-nav button#view-minigames:hover { border-color: var(--game-accent-hover); }
+nav.main-nav button#view-minigames.active {
+  background: var(--game-accent);
+  border-color: var(--game-accent);
+  color: #fff;
 }
 
 main { padding: 1.75rem; max-width: 1080px; margin: 0 auto; }
@@ -1766,6 +1800,9 @@ form#add-item-form button[type="submit"]:hover { background: var(--accent-hover)
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  min-width: 0; /* sans ça, un enfant flex ne peut pas rétrécir sous sa taille de contenu :
+                   l'ellipse ne s'appliquait jamais et le texte débordait de la tuile */
+  flex: 1;
 }
 
 /* ---------- roulette ---------- */
@@ -1968,13 +2005,24 @@ form#add-item-form button[type="submit"]:hover { background: var(--accent-hover)
 
 .minigame-join-row input {
   width: 140px;
-  border-radius: 8px;
-  border: 1px solid var(--border);
-  background: var(--bg);
+  border-radius: 10px;
+  border: 2px solid var(--border);
+  background: var(--card);
   color: var(--text);
-  padding: 0.5rem 0.7rem;
+  padding: 0.55rem 0.7rem;
   font-family: "Nunito", sans-serif;
+  font-weight: 800;
+  font-size: 0.95rem;
+  letter-spacing: 0.1em;
+  text-align: center;
   text-transform: uppercase;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.minigame-join-row input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
 .quiz-round-counter {
@@ -2546,6 +2594,8 @@ form#add-item-form button[type="submit"]:hover { background: var(--accent-hover)
   padding: 0.4rem 0.6rem;
   border-radius: 8px;
   cursor: pointer;
+  max-width: 210px;
+  min-width: 0;
 }
 
 /* ---------- étiquettes imprimables (QR code) ---------- */
