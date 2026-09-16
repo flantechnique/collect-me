@@ -271,6 +271,9 @@ const el = {
   accountSteamPersona: document.getElementById("account-steam-persona"),
   accountSteamConnectBtn: document.getElementById("account-steam-connect-btn"),
   accountSteamImportBtn: document.getElementById("account-steam-import-btn"),
+  accountDiscogsImportForm: document.getElementById("account-discogs-import-form"),
+  accountDiscogsUsernameInput: document.getElementById("account-discogs-username-input"),
+  accountDiscogsImportStatus: document.getElementById("account-discogs-import-status"),
   accountSteamUnlinkBtn: document.getElementById("account-steam-unlink-btn"),
   accountSteamImportStatus: document.getElementById("account-steam-import-status"),
   showcaseSocialLinks: document.getElementById("showcase-social-links"),
@@ -4659,6 +4662,45 @@ el.accountSteamImportBtn.addEventListener("click", async () => {
   el.accountSteamImportBtn.disabled = false;
 });
 
+// import en masse depuis un compte Discogs public (Phase 17) : même principe que l'import
+// Steam ci-dessus, mais pas de compte à lier au préalable -- juste un pseudo Discogs dont la
+// collection est publique (voir discogs-import-library, qui filtre vinyle/CD et dédoublonne).
+el.accountDiscogsImportForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const username = el.accountDiscogsUsernameInput.value.trim();
+  if (!username) return;
+  const { data: { session } } = await sb.auth.getSession();
+  if (!session) return;
+  const submitBtn = el.accountDiscogsImportForm.querySelector("button[type=submit]");
+  el.accountDiscogsImportStatus.hidden = false;
+  el.accountDiscogsImportStatus.textContent = "Import en cours, ça peut prendre quelques instants...";
+  submitBtn.disabled = true;
+  try {
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/discogs-import-library`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${session.access_token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ username }),
+    });
+    const payload = await res.json();
+    if (!res.ok) {
+      el.accountDiscogsImportStatus.textContent = payload.error || "Erreur lors de l'import.";
+    } else if (payload.total === 0) {
+      el.accountDiscogsImportStatus.textContent = "Aucun disque trouvé dans cette collection Discogs.";
+    } else {
+      el.accountDiscogsImportStatus.textContent =
+        `${payload.imported} disque${payload.imported > 1 ? "s" : ""} importé${payload.imported > 1 ? "s" : ""}` +
+        (payload.already_present ? `, ${payload.already_present} déjà présent${payload.already_present > 1 ? "s" : ""}` : "") +
+        (payload.skipped_format ? `, ${payload.skipped_format} ignoré${payload.skipped_format > 1 ? "s" : ""} (format non vinyle/CD)` : "") +
+        (payload.truncated ? " (collection tronquée aux 500 premiers disques)" : "") +
+        ".";
+      loadMyCollection();
+    }
+  } catch (_e) {
+    el.accountDiscogsImportStatus.textContent = "Impossible de contacter le serveur pour l'import.";
+  }
+  submitBtn.disabled = false;
+});
+
 // upload avatar/bannière : bucket Storage public "profile-images", chemin
 // <user_id>/avatar.<ext> ou <user_id>/banner.<ext> (upsert pour remplacer l'ancien fichier),
 // URL publique permanente (contrairement aux photos personnelles, ces images sont destinées
@@ -5521,11 +5563,18 @@ const PUBLIC_BADGE_DEFS = [
 ];
 
 async function renderShowcaseBadges(items, wishlistItems) {
-  if (!categories.length) await loadCategories();
+  // Ne jamais réutiliser loadCategories() ici : cette fonction a des effets de bord
+  // (renderCategoryGrid + switchView("home")) qui feraient réapparaître le tableau de
+  // bord privé par-dessus la vitrine publique. On récupère juste le nombre de catégories.
+  let categoriesTotal = categories.length;
+  if (!categoriesTotal) {
+    const { data, error } = await sb.from("categories").select("id");
+    categoriesTotal = !error && data ? data.length : 0;
+  }
   const stats = {
     totalOwned: items.length,
     categoriesOwned: new Set(items.map((i) => i.category_slug)).size,
-    categoriesTotal: categories.length,
+    categoriesTotal,
     totalWanted: wishlistItems.length,
   };
   const unlocked = PUBLIC_BADGE_DEFS.filter((b) => b.check(stats));
