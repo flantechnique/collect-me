@@ -125,6 +125,12 @@ header {
   background: rgba(239, 224, 199, 0.88);
   backdrop-filter: blur(6px);
   border-bottom: 1px solid var(--border);
+  /* `backdrop-filter` crée à lui seul un nouveau contexte d'empilement (comme `transform` ou
+     `opacity < 1`) : sans z-index explicite ici, les menus du header (compte, notifications)
+     restaient piégés dans ce contexte et passaient sous le contenu de <main> (ex. les résultats
+     de la recherche globale sur l'accueil), quel que soit leur propre z-index interne. */
+  position: relative;
+  z-index: 40;
 }
 
 header h1 { font-size: 1.4rem; margin: 0; letter-spacing: 0.01em; }
