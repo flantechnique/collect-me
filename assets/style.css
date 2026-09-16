@@ -1998,6 +1998,27 @@ form#add-item-form button[type="submit"]:hover { background: var(--accent-hover)
   margin-bottom: 1rem;
 }
 
+/* "Jouer en solo", "Créer un salon classé/amical" — n'avaient aucun style propre et
+   s'affichaient comme des boutons système bruts (retour utilisateur, capture à l'appui). */
+.minigame-actions button {
+  background: var(--card);
+  color: var(--accent);
+  border: 2px solid var(--accent);
+  padding: 0.6rem 1.1rem;
+  border-radius: 999px;
+  cursor: pointer;
+  font-family: "Nunito", sans-serif;
+  font-weight: 800;
+  font-size: 0.85rem;
+  transition: background 0.15s ease, color 0.15s ease, transform 0.1s ease;
+}
+
+.minigame-actions button:hover {
+  background: var(--accent);
+  color: #fff;
+  transform: translateY(-1px);
+}
+
 .minigame-join-row {
   display: flex;
   gap: 0.4rem;
@@ -2024,6 +2045,21 @@ form#add-item-form button[type="submit"]:hover { background: var(--accent-hover)
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
+
+.minigame-join-row button {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  padding: 0.55rem 1.2rem;
+  border-radius: 10px;
+  cursor: pointer;
+  font-family: "Nunito", sans-serif;
+  font-weight: 800;
+  font-size: 0.9rem;
+  transition: background 0.15s ease;
+}
+
+.minigame-join-row button:hover { background: var(--accent-hover); }
 
 .quiz-round-counter {
   font-weight: 700;
