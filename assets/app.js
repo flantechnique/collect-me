@@ -125,6 +125,7 @@ const el = {
   statsExportReimportBtn: document.getElementById("stats-export-reimport-btn"),
   statsExportPdfBtn: document.getElementById("stats-export-pdf-btn"),
   valueHistoryContent: document.getElementById("value-history-content"),
+  marketValueHistoryContent: document.getElementById("market-value-history-content"),
   collectionViewToggle: document.getElementById("collection-view-toggle"),
   collectionLoanedFilterBtn: document.getElementById("collection-loaned-filter-btn"),
   tcgSetProgress: document.getElementById("tcg-set-progress"),
@@ -354,6 +355,7 @@ const CATEGORY_SEARCH_FUNCTIONS = {
   dvd: "tmdb-search",
   movie_poster: "tmdb-search",
   tcg: "tcg-search",
+  coin: "coins-search",
 };
 
 // Pour chaque catégorie avec recherche externe : comment transformer un résultat
@@ -412,6 +414,18 @@ const CATEGORY_RESULT_MAPPERS = {
       ...(r.year && { year: r.year }),
     },
   }),
+  // Numista fournit un identifiant de "type" de monnaie (numista_id) -- un type couvre en
+  // général une plage d'années (min_year..max_year), on ne retient que la première ici ;
+  // l'année précise d'un exemplaire donné reste modifiable à la main après import.
+  coin: (r) => ({
+    externalIds: { numista_id: r.numista_id },
+    attributes: {
+      ...(r.country && { country: r.country }),
+      ...(r.year && { year: r.year }),
+      ...(r.denomination && { denomination: r.denomination }),
+      ...(r.metal && { metal: r.metal }),
+    },
+  }),
 };
 
 // Pour chaque catégorie, l'attribut qui représente son "créateur" (artiste, studio,
@@ -434,6 +448,7 @@ const EXTERNAL_ID_KEY = {
   dvd: "tmdb_id",
   movie_poster: "tmdb_id",
   tcg: "tcg_id",
+  coin: "numista_id",
 };
 
 // Clé dans external_ids qui identifie le "créateur" d'un item, quand on la connaît
@@ -3569,16 +3584,20 @@ async function loadStats() {
     el.timelineContent.innerHTML = "";
     el.wrappedContent.innerHTML = "";
     el.valueHistoryContent.innerHTML = "";
+    el.marketValueHistoryContent.innerHTML = "";
     return;
   }
   el.statsContent.innerHTML = "<p class='empty'>Chargement...</p>";
   el.timelineContent.innerHTML = "<p class='empty'>Chargement...</p>";
   el.valueHistoryContent.innerHTML = "<p class='empty'>Chargement...</p>";
+  el.marketValueHistoryContent.innerHTML = "<p class='empty'>Chargement...</p>";
   const entries = await fetchCollectionEntries();
   await fetchItemPriceStats(entries.map((e) => e.item_id));
   renderStats(entries);
   renderTimeline(entries);
   renderValueHistory(entries);
+  await captureValueSnapshotIfNeeded(entries);
+  await renderMarketValueHistory();
   el.wrappedContent.innerHTML = "";
   currentStatsEntries = entries; // pour le rapport PDF, généré à la demande sans tout refaire
 }
@@ -3789,6 +3808,97 @@ function renderValueHistory(entries) {
       <span>${points[points.length - 1].month}</span>
     </div>
     ${hasUSD ? "<p class='empty'>Le tracé ne suit que la part en €uros ; le total ci-dessus inclut aussi la part en $ (devises non converties, pas d'API de change branchée).</p>" : ""}
+  `;
+}
+
+// ---------- valeur de marché dans le temps, par relevés (Phase 18) ----------
+// Différent de renderValueHistory ci-dessus : ici on ne classe pas par date d'acquisition (donc
+// pas de reconstitution rétroactive possible), on capture un relevé de la valeur totale actuelle
+// à chaque visite des Statistiques (au plus un par jour et par utilisateur, table
+// collection_value_snapshots) puis on trace la courbe de ces relevés. Le premier relevé date donc
+// toujours d'aujourd'hui ou d'une visite précédente -- jamais du passé.
+function computeOwnedValue(entries) {
+  let eur = 0;
+  let usd = 0;
+  let count = 0;
+  entries.forEach((e) => {
+    if (e.status !== "owned" && e.status !== "for_sale") return;
+    if (e.price_paid != null) {
+      eur += Number(e.price_paid);
+      count++;
+    } else {
+      const resolved = resolvedItemValue(e.items);
+      if (resolved) {
+        if (resolved.currency === "USD") usd += resolved.amount;
+        else eur += resolved.amount;
+        count++;
+      }
+    }
+  });
+  return { eur, usd, count };
+}
+
+async function captureValueSnapshotIfNeeded(entries) {
+  if (!currentUser) return;
+  const { eur, usd, count } = computeOwnedValue(entries);
+  if (!count) return; // rien à valoriser, inutile de polluer l'historique avec un relevé à zéro
+  const today = new Date().toISOString().slice(0, 10);
+  await sb.from("collection_value_snapshots").upsert(
+    {
+      user_id: currentUser.id,
+      snapshot_date: today,
+      total_value_eur: eur,
+      total_value_usd: usd,
+      item_count: count,
+    },
+    { onConflict: "user_id,snapshot_date" }
+  );
+}
+
+async function renderMarketValueHistory() {
+  if (!currentUser) {
+    el.marketValueHistoryContent.innerHTML = "";
+    return;
+  }
+  const { data, error } = await sb
+    .from("collection_value_snapshots")
+    .select("*")
+    .eq("user_id", currentUser.id)
+    .order("snapshot_date", { ascending: true });
+
+  if (error || !data || data.length < 2) {
+    el.marketValueHistoryContent.innerHTML =
+      "<p class='empty'>Le suivi vient de démarrer : reviens consulter tes statistiques de temps en temps pour voir la courbe se dessiner (un relevé par jour de visite).</p>";
+    return;
+  }
+
+  const w = 600;
+  const h = 200;
+  const padding = 28;
+  const maxVal = Math.max(...data.map((p) => Number(p.total_value_eur)), 1);
+  const xStep = (w - padding * 2) / Math.max(data.length - 1, 1);
+  const coords = data.map((p, i) => {
+    const x = padding + i * xStep;
+    const y = h - padding - (Number(p.total_value_eur) / maxVal) * (h - padding * 2);
+    return [x, y];
+  });
+  const linePath = coords.map(([x, y], i) => `${i === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`).join(" ");
+  const areaPath = `${linePath} L${coords[coords.length - 1][0].toFixed(1)},${h - padding} L${coords[0][0].toFixed(1)},${h - padding} Z`;
+
+  const last = data[data.length - 1];
+  const hasUSD = data.some((p) => Number(p.total_value_usd) > 0);
+
+  el.marketValueHistoryContent.innerHTML = `
+    <svg viewBox="0 0 ${w} ${h}" class="value-history-chart" preserveAspectRatio="none">
+      <path d="${areaPath}" class="value-history-area"></path>
+      <path d="${linePath}" class="value-history-line"></path>
+    </svg>
+    <div class="value-history-labels">
+      <span>${data[0].snapshot_date}</span>
+      <span class="value-history-current">${formatMixedCurrencyValue(Number(last.total_value_eur), Number(last.total_value_usd))}</span>
+      <span>${last.snapshot_date}</span>
+    </div>
+    ${hasUSD ? "<p class='empty'>Le tracé ne suit que la part en €uros ; le total ci-dessus inclut aussi la part en $ (devises non converties).</p>" : ""}
   `;
 }
 
@@ -7502,6 +7612,11 @@ function renderDetail() {
     if (detail.card_number) html += `<li>Numéro : ${escapeHtml(detail.card_number)}</li>`;
     if (detail.rarity) html += `<li>Rareté : ${escapeHtml(detail.rarity)}</li>`;
     if (detail.year) html += `<li>Année : ${escapeHtml(String(detail.year))}</li>`;
+  } else if (cat.slug === "coin") {
+    if (detail.country) html += `<li>Pays : ${escapeHtml(detail.country)}</li>`;
+    if (detail.denomination) html += `<li>Valeur faciale : ${escapeHtml(detail.denomination)}</li>`;
+    if (detail.metal) html += `<li>Métal : ${escapeHtml(detail.metal)}</li>`;
+    if (detail.year) html += `<li>Année : ${escapeHtml(String(detail.year))}</li>`;
   }
   html += `</ul>`;
 
@@ -7571,6 +7686,15 @@ function renderDetail() {
       html += `<li><a href="${l.url}" target="_blank" rel="noopener noreferrer">${escapeHtml(l.label)}</a></li>`;
     });
     html += `</ul>`;
+  }
+
+  if (cat.slug === "coin" && detail.numista_url) {
+    html += `
+      <h3 class="detail-subheading">Référence</h3>
+      <ul class="buy-links">
+        <li><a href="${detail.numista_url}" target="_blank" rel="noopener noreferrer">Voir la fiche complète sur Numista</a></li>
+      </ul>
+    `;
   }
 
   el.detailContent.innerHTML = html;
@@ -7719,6 +7843,16 @@ async function addDetailToCollection(status) {
         estimated_value_amount: detail.estimated_value_amount,
         estimated_value_currency: detail.estimated_value_currency,
       }),
+    };
+    coverImageUrl = detail.cover_image ?? null;
+  } else if (cat.slug === "coin") {
+    title = detail.title;
+    externalIds = { numista_id: detail.numista_id };
+    attributes = {
+      ...(detail.country && { country: detail.country }),
+      ...(detail.year && { year: detail.year }),
+      ...(detail.denomination && { denomination: detail.denomination }),
+      ...(detail.metal && { metal: detail.metal }),
     };
     coverImageUrl = detail.cover_image ?? null;
   }
