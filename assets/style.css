@@ -1640,6 +1640,60 @@ form#add-item-form button[type="submit"]:hover { background: var(--accent-hover)
   font-weight: 700;
 }
 
+/* ---------- mini-jeux : Pixel Guess ---------- */
+.pixelguess-round { text-align: center; }
+
+.pixelguess-canvas {
+  display: block;
+  margin: 0 auto 0.9rem;
+  width: 240px;
+  height: 240px;
+  max-width: 100%;
+  aspect-ratio: 1 / 1;
+  border-radius: 12px;
+  border: 1.5px solid var(--border);
+  background: var(--bg-soft);
+}
+
+.pixelguess-form {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.pixelguess-input {
+  flex: 1 1 220px;
+  max-width: 320px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  padding: 0.6rem 0.8rem;
+  font-family: "Nunito", sans-serif;
+  font-size: 0.9rem;
+}
+
+.pixelguess-form button[type="submit"] {
+  background: var(--accent);
+  color: #fff8f0;
+  border: none;
+  padding: 0.6rem 1.2rem;
+  border-radius: 999px;
+  cursor: pointer;
+  font-family: "Nunito", sans-serif;
+  font-weight: 700;
+}
+.pixelguess-form button[type="submit"]:hover { background: var(--accent-hover); }
+
+.pixelguess-feedback {
+  margin: 0.7rem 0 0;
+  font-weight: 700;
+  min-height: 1.2em;
+}
+.pixelguess-feedback.correct { color: #3f6b3a; }
+.pixelguess-feedback.incorrect { color: #a2412f; }
+
 /* ---------- vitrine publique ---------- */
 .showcase-header {
   display: flex;

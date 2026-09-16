@@ -87,6 +87,12 @@ const el = {
   quizplaylistJoinCode: document.getElementById("quizplaylist-join-code"),
   quizplaylistJoinBtn: document.getElementById("quizplaylist-join-btn"),
   quizplaylistArea: document.getElementById("quizplaylist-area"),
+  pixelguessSoloBtn: document.getElementById("pixelguess-solo-btn"),
+  pixelguessMultiRankedBtn: document.getElementById("pixelguess-multi-ranked-btn"),
+  pixelguessMultiCasualBtn: document.getElementById("pixelguess-multi-casual-btn"),
+  pixelguessJoinCode: document.getElementById("pixelguess-join-code"),
+  pixelguessJoinBtn: document.getElementById("pixelguess-join-btn"),
+  pixelguessArea: document.getElementById("pixelguess-area"),
   funView: document.getElementById("fun-view"),
   recommendationsContent: document.getElementById("recommendations-content"),
   compareInput: document.getElementById("compare-input"),
@@ -3478,10 +3484,17 @@ function pickRandom(arr, n) {
 
 function loadMinigamesView() {
   renderLeaderboard();
-  if (!quizSoloState) {
-    el.quizplaylistArea.innerHTML = "";
-  }
+  if (!quizSoloState && !currentGameRoom) el.quizplaylistArea.innerHTML = "";
+  if (!pixelSoloState && !currentGameRoom) el.pixelguessArea.innerHTML = "";
 }
+
+// aire d'affichage propre à chaque mini-jeu (salon multijoueur générique)
+function areaElFor(gameSlug) {
+  return gameSlug === "pixel_guess" ? el.pixelguessArea : el.quizplaylistArea;
+}
+
+const ROOM_TOTAL_ROUNDS = { quiz_playlist: 10, pixel_guess: 5 };
+const ROOM_ANSWER_WINDOW_MS = { quiz_playlist: 20000, pixel_guess: 22000 };
 
 // ---------- classement ----------
 let lbScope = "general";
@@ -3738,25 +3751,35 @@ async function finishQuizPlaylistSolo() {
   renderLeaderboard();
 }
 
-// ---------- Quizz Playlist : salon multijoueur (classé ou amical) ----------
-el.quizplaylistMultiRankedBtn.addEventListener("click", () => createGameRoom("ranked"));
-el.quizplaylistMultiCasualBtn.addEventListener("click", () => createGameRoom("casual"));
-el.quizplaylistJoinBtn.addEventListener("click", joinGameRoomByCode);
+// ---------- salon multijoueur générique (Quizz Playlist et Pixel Guess partagent cette
+// mécanique de salon : un hôte arbitre, les autres rejoignent par code à 6 caractères) ----------
+el.quizplaylistMultiRankedBtn.addEventListener("click", () => createGameRoom("ranked", "quiz_playlist"));
+el.quizplaylistMultiCasualBtn.addEventListener("click", () => createGameRoom("casual", "quiz_playlist"));
+el.quizplaylistJoinBtn.addEventListener("click", () => joinGameRoomByCode("quiz_playlist"));
+el.pixelguessMultiRankedBtn.addEventListener("click", () => createGameRoom("ranked", "pixel_guess"));
+el.pixelguessMultiCasualBtn.addEventListener("click", () => createGameRoom("casual", "pixel_guess"));
+el.pixelguessJoinBtn.addEventListener("click", () => joinGameRoomByCode("pixel_guess"));
 
 function randomRoomCode() {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // évite 0/O et 1/I, ambigus à l'oral/à l'écrit
   return Array.from({ length: 6 }, () => chars[Math.floor(Math.random() * chars.length)]).join("");
 }
 
-async function createGameRoom(mode) {
+function joinCodeInputFor(gameSlug) {
+  return gameSlug === "pixel_guess" ? el.pixelguessJoinCode : el.quizplaylistJoinCode;
+}
+
+async function createGameRoom(mode, gameSlug) {
   if (!currentUser) return alert("Connecte-toi pour créer un salon.");
   quizSoloState = null;
+  pixelSoloState = null;
   leaveGameRoomChannel();
+  const areaEl = areaElFor(gameSlug);
   for (let attempt = 0; attempt < 5; attempt++) {
     const code = randomRoomCode();
     const { data, error } = await sb
       .from("game_rooms")
-      .insert({ code, game_slug: "quiz_playlist", mode, host_id: currentUser.id, total_rounds: 10 })
+      .insert({ code, game_slug: gameSlug, mode, host_id: currentUser.id, total_rounds: ROOM_TOTAL_ROUNDS[gameSlug] ?? 10 })
       .select()
       .single();
     if (!error) {
@@ -3769,26 +3792,32 @@ async function createGameRoom(mode) {
       return enterGameRoom(data.id);
     }
     if (error.code !== "23505") {
-      el.quizplaylistArea.innerHTML = `<p class="empty">Erreur : ${escapeHtml(error.message)}</p>`;
+      areaEl.innerHTML = `<p class="empty">Erreur : ${escapeHtml(error.message)}</p>`;
       return;
     }
   }
 }
 
-async function joinGameRoomByCode() {
+async function joinGameRoomByCode(gameSlug) {
   if (!currentUser) return alert("Connecte-toi pour rejoindre un salon.");
-  const code = el.quizplaylistJoinCode.value.trim().toUpperCase();
+  const areaEl = areaElFor(gameSlug);
+  const code = joinCodeInputFor(gameSlug).value.trim().toUpperCase();
   if (!code) return;
   quizSoloState = null;
+  pixelSoloState = null;
   leaveGameRoomChannel();
 
   const { data: room, error } = await sb.from("game_rooms").select("*").eq("code", code).maybeSingle();
   if (error || !room) {
-    el.quizplaylistArea.innerHTML = "<p class='empty'>Salon introuvable. Vérifie le code.</p>";
+    areaEl.innerHTML = "<p class='empty'>Salon introuvable. Vérifie le code.</p>";
+    return;
+  }
+  if (room.game_slug !== gameSlug) {
+    areaEl.innerHTML = "<p class='empty'>Ce code correspond à un autre mini-jeu.</p>";
     return;
   }
   if (room.status !== "waiting") {
-    el.quizplaylistArea.innerHTML = "<p class='empty'>Cette partie a déjà commencé ou est terminée.</p>";
+    areaEl.innerHTML = "<p class='empty'>Cette partie a déjà commencé ou est terminée.</p>";
     return;
   }
   await sb.from("game_room_players").upsert(
@@ -3806,7 +3835,7 @@ async function joinGameRoomByCode() {
 async function enterGameRoom(roomId) {
   const { data: room } = await sb.from("game_rooms").select("*").eq("id", roomId).single();
   if (!room) return;
-  currentGameRoom = { room, players: [], isHost: room.host_id === currentUser.id };
+  currentGameRoom = { room, players: [], isHost: room.host_id === currentUser.id, areaEl: areaElFor(room.game_slug) };
   await refreshRoomPlayers();
   subscribeGameRoomChannel(roomId);
   renderGameRoom();
@@ -3829,6 +3858,20 @@ function subscribeGameRoomChannel(roomId) {
         currentGameRoom.room = payload.new;
         currentGameRoom.pointAwardedThisRound = false;
         currentGameRoom.advancingRound = false;
+        clearRoundTimeout();
+        // filet de sécurité : si l'hôte, on force le passage à la manche suivante quand le
+        // délai est écoulé (utile si un joueur ne répond jamais — sinon la manche resterait
+        // bloquée indéfiniment, faute d'un "tout le monde a répondu" jamais atteint).
+        if (currentGameRoom.isHost && payload.new.status === "playing" && payload.new.round_deadline) {
+          const msLeft = new Date(payload.new.round_deadline).getTime() - Date.now() + 1500;
+          const round = payload.new.current_round;
+          currentGameRoom.roundTimeoutId = setTimeout(() => {
+            if (currentGameRoom && !currentGameRoom.advancingRound && currentGameRoom.room.current_round === round) {
+              currentGameRoom.advancingRound = true;
+              advanceGameRoomRound(round + 1);
+            }
+          }, Math.max(msLeft, 1000));
+        }
         renderGameRoom();
         if (payload.new.status === "finished") recordMyRoomScoreIfNeeded();
       }
@@ -3849,7 +3892,19 @@ function subscribeGameRoomChannel(roomId) {
     .subscribe();
 }
 
+function clearRoundTimeout() {
+  if (currentGameRoom?.roundTimeoutId) {
+    clearTimeout(currentGameRoom.roundTimeoutId);
+    currentGameRoom.roundTimeoutId = null;
+  }
+  if (currentGameRoom?.pgAnimInterval) {
+    clearInterval(currentGameRoom.pgAnimInterval);
+    currentGameRoom.pgAnimInterval = null;
+  }
+}
+
 function leaveGameRoomChannel() {
+  clearRoundTimeout();
   if (gameRoomChannel) {
     sb.removeChannel(gameRoomChannel);
     gameRoomChannel = null;
@@ -3861,15 +3916,17 @@ async function leaveGameRoomForGood() {
   if (!currentGameRoom) return;
   const roomId = currentGameRoom.room.id;
   const wasHost = currentGameRoom.isHost;
+  const areaEl = currentGameRoom.areaEl;
   await sb.from("game_room_players").delete().eq("room_id", roomId).eq("user_id", currentUser.id);
   // l'hôte qui part clôt le salon : sans lui personne ne peut plus faire avancer les manches
   if (wasHost) await sb.from("game_rooms").update({ status: "finished" }).eq("id", roomId);
   leaveGameRoomChannel();
-  el.quizplaylistArea.innerHTML = "";
+  if (areaEl) areaEl.innerHTML = "";
 }
 
 async function startGameRoom() {
   if (!currentGameRoom?.isHost) return;
+  const { room, areaEl } = currentGameRoom;
   const participantIds = currentGameRoom.players.map((p) => p.user_id);
   const { data, error } = await sb
     .from("collection_entries")
@@ -3877,13 +3934,23 @@ async function startGameRoom() {
     .in("user_id", participantIds)
     .eq("status", "owned");
   if (error) {
-    el.quizplaylistArea.innerHTML = `<p class="empty">Erreur : ${escapeHtml(error.message)}</p>`;
+    areaEl.innerHTML = `<p class="empty">Erreur : ${escapeHtml(error.message)}</p>`;
     return;
   }
-  const owned = (data ?? []).filter((e) => DISCOGS_CATEGORIES.includes(e.items.categories.slug));
-  const pool = [...new Map(owned.map((e) => [e.item_id, e.items])).values()];
+  let pool;
+  if (room.game_slug === "pixel_guess") {
+    const withImage = (data ?? []).filter((e) => e.items.cover_image_url);
+    pool = [...new Map(withImage.map((e) => [e.item_id, e.items])).values()];
+  } else {
+    const owned = (data ?? []).filter((e) => DISCOGS_CATEGORIES.includes(e.items.categories.slug));
+    pool = [...new Map(owned.map((e) => [e.item_id, e.items])).values()];
+  }
   if (pool.length < 4) {
-    alert("Pas assez de vinyles/CD possédés au total dans le salon pour lancer une partie (4 minimum, tous joueurs confondus).");
+    alert(
+      room.game_slug === "pixel_guess"
+        ? "Pas assez d'objets possédés avec une image au total dans le salon pour lancer une partie (4 minimum, tous joueurs confondus)."
+        : "Pas assez de vinyles/CD possédés au total dans le salon pour lancer une partie (4 minimum, tous joueurs confondus)."
+    );
     return;
   }
   currentGameRoom.combinedPool = pool;
@@ -3899,26 +3966,31 @@ async function advanceGameRoomRound(roundNumber) {
     return;
   }
 
-  const question = await buildQuizPlaylistQuestion(combinedPool);
+  const question =
+    room.game_slug === "pixel_guess"
+      ? buildPixelGuessQuestion(combinedPool)
+      : await buildQuizPlaylistQuestion(combinedPool);
   if (!question) {
     await sb.from("game_rooms").update({ status: "finished", current_question: null }).eq("id", room.id);
     return;
   }
+  if (room.game_slug === "pixel_guess") question.roundStartedAt = Date.now();
 
+  const windowMs = ROOM_ANSWER_WINDOW_MS[room.game_slug] ?? 20000;
   await sb
     .from("game_rooms")
     .update({
       status: "playing",
       current_round: roundNumber,
       current_question: question,
-      round_deadline: new Date(Date.now() + 20000).toISOString(),
+      round_deadline: new Date(Date.now() + windowMs).toISOString(),
     })
     .eq("id", room.id);
 }
 
 function renderGameRoom() {
   if (!currentGameRoom) return;
-  const { room, players, isHost } = currentGameRoom;
+  const { room, players, isHost, areaEl } = currentGameRoom;
 
   if (room.status === "waiting") {
     const wrapper = document.createElement("div");
@@ -3933,19 +4005,21 @@ function renderGameRoom() {
       }
       <button type="button" id="room-leave-btn" class="danger-btn">Quitter le salon</button>
     `;
-    el.quizplaylistArea.innerHTML = "";
-    el.quizplaylistArea.appendChild(wrapper);
+    areaEl.innerHTML = "";
+    areaEl.appendChild(wrapper);
     if (isHost) document.getElementById("room-start-btn").onclick = startGameRoom;
     document.getElementById("room-leave-btn").onclick = leaveGameRoomForGood;
     return;
   }
 
-  if (room.status === "playing") return renderGameRoomRound();
+  if (room.status === "playing") {
+    return room.game_slug === "pixel_guess" ? renderPixelGuessRoomRound() : renderQuizRoomRound();
+  }
   if (room.status === "finished") return renderGameRoomResults();
 }
 
-function renderGameRoomRound() {
-  const { room, players } = currentGameRoom;
+function renderQuizRoomRound() {
+  const { room, players, areaEl } = currentGameRoom;
   const question = room.current_question;
   const myAnswered = currentGameRoom.myAnswerRound === room.current_round;
 
@@ -3974,27 +4048,106 @@ function renderGameRoomRound() {
       btn.type = "button";
       btn.className = "quiz-option-btn";
       btn.textContent = opt;
-      btn.onclick = () => submitRoomAnswer(opt, question.correctAnswer);
+      btn.onclick = () => submitRoomAnswer(opt, opt === question.correctAnswer);
       optionsWrap.appendChild(btn);
     });
   }
 
-  el.quizplaylistArea.innerHTML = "";
-  el.quizplaylistArea.appendChild(wrapper);
+  areaEl.innerHTML = "";
+  areaEl.appendChild(wrapper);
 }
 
-async function submitRoomAnswer(answer, correctAnswer) {
+// ---------- Pixel Guess : rendu de la manche en salon (image qui se dépixelise en continu
+// pendant toute la fenêtre de réponse, réponse libre plutôt qu'un QCM) ----------
+function renderPixelGuessRoomRound() {
+  const { room, players, areaEl } = currentGameRoom;
+  const question = room.current_question;
+  const myAnswered = currentGameRoom.myAnswerRound === room.current_round;
+
+  if (currentGameRoom.pgAnimInterval) {
+    clearInterval(currentGameRoom.pgAnimInterval);
+    currentGameRoom.pgAnimInterval = null;
+  }
+
+  const wrapper = document.createElement("div");
+  wrapper.className = "quiz-round pixelguess-round";
+  const scoreboard = [...players]
+    .sort((a, b) => b.score - a.score)
+    .map((p) => `<li>${escapeHtml(p.display_name || "Joueur")} — ${p.score} pt${p.score > 1 ? "s" : ""}</li>`)
+    .join("");
+  wrapper.innerHTML = `
+    <p class="quiz-round-counter">Manche ${room.current_round}/${room.total_rounds} ${room.mode === "ranked" ? "🏆" : "🎈"}</p>
+    <ul class="room-scoreboard">${scoreboard}</ul>
+    <canvas class="pixelguess-canvas" width="240" height="240"></canvas>
+    <p class="room-answer-status empty"></p>
+  `;
+  const canvas = wrapper.querySelector(".pixelguess-canvas");
+  const statusEl = wrapper.querySelector(".room-answer-status");
+
+  if (question) {
+    const startedAt = question.roundStartedAt ?? Date.now();
+    const deadline = room.round_deadline ? new Date(room.round_deadline).getTime() : startedAt + 22000;
+    const duration = Math.max(1000, deadline - startedAt);
+    const tick = () => {
+      const frac = Math.min(1, (Date.now() - startedAt) / duration);
+      const pixelSize = Math.round(3 + (40 - 3) * frac);
+      drawPixelated(canvas, question.imageUrl, pixelSize).catch(() => {});
+      if (frac >= 1 && currentGameRoom?.pgAnimInterval) {
+        clearInterval(currentGameRoom.pgAnimInterval);
+        currentGameRoom.pgAnimInterval = null;
+      }
+    };
+    tick();
+    currentGameRoom.pgAnimInterval = setInterval(tick, 400);
+  }
+
+  if (myAnswered) {
+    statusEl.textContent = "Bonne réponse envoyée, en attente des autres joueurs...";
+  } else if (question) {
+    const form = document.createElement("form");
+    form.className = "pixelguess-form";
+    form.innerHTML = `<input type="text" class="pixelguess-input" placeholder="Ton hypothèse..." autocomplete="off" /><button type="submit">Valider</button>`;
+    const feedback = document.createElement("p");
+    feedback.className = "pixelguess-feedback";
+    wrapper.insertBefore(form, statusEl);
+    wrapper.insertBefore(feedback, statusEl);
+    const input = form.querySelector(".pixelguess-input");
+    form.onsubmit = (e) => {
+      e.preventDefault();
+      const guess = input.value.trim();
+      if (!guess) return;
+      const correct = isCorrectGuess(guess, question.correctAnswer);
+      submitRoomAnswer(guess, correct, { lock: correct });
+      if (correct) {
+        feedback.className = "pixelguess-feedback correct";
+        feedback.textContent = "✅ Bonne réponse !";
+      } else {
+        feedback.className = "pixelguess-feedback incorrect";
+        feedback.textContent = "❌ Pas ça, retente !";
+        input.value = "";
+        input.focus();
+      }
+    };
+  }
+
+  areaEl.innerHTML = "";
+  areaEl.appendChild(wrapper);
+}
+
+async function submitRoomAnswer(answer, isCorrect, { lock = true } = {}) {
   if (!currentGameRoom) return;
   const round = currentGameRoom.room.current_round;
   if (currentGameRoom.myAnswerRound === round) return;
-  currentGameRoom.myAnswerRound = round;
-  renderGameRoomRound();
+  if (lock) {
+    currentGameRoom.myAnswerRound = round;
+    renderGameRoom();
+  }
   await sb.from("game_room_answers").insert({
     room_id: currentGameRoom.room.id,
     round_number: round,
     user_id: currentUser.id,
     answer,
-    is_correct: answer === correctAnswer,
+    is_correct: isCorrect,
   });
 }
 
@@ -4023,8 +4176,16 @@ async function handleRoomAnswerInsert(answerRow) {
   }
 
   if (currentGameRoom.isHost && !currentGameRoom.advancingRound) {
-    const everyoneAnswered = (roundAnswers ?? []).length >= currentGameRoom.players.length;
-    if (firstCorrect || everyoneAnswered) {
+    let shouldAdvance = !!firstCorrect;
+    // "tout le monde a répondu" ne s'applique qu'au QCM (une ligne = une réponse par joueur).
+    // En réponse libre (Pixel Guess), un joueur peut soumettre plusieurs hypothèses fausses
+    // sans pour autant avoir fini sa manche : on ne se base alors que sur la bonne réponse ou
+    // sur le filet de sécurité par délai (voir subscribeGameRoomChannel).
+    if (!shouldAdvance && currentGameRoom.room.game_slug !== "pixel_guess") {
+      const answeredUserIds = new Set((roundAnswers ?? []).map((a) => a.user_id));
+      shouldAdvance = answeredUserIds.size >= currentGameRoom.players.length;
+    }
+    if (shouldAdvance) {
       currentGameRoom.advancingRound = true;
       setTimeout(() => {
         if (currentGameRoom) advanceGameRoomRound(currentGameRoom.room.current_round + 1);
@@ -4052,12 +4213,204 @@ function renderGameRoomResults() {
     </ol>
     <button type="button" id="room-final-leave-btn">Retour</button>
   `;
-  el.quizplaylistArea.innerHTML = "";
-  el.quizplaylistArea.appendChild(wrapper);
+  currentGameRoom.areaEl.innerHTML = "";
+  currentGameRoom.areaEl.appendChild(wrapper);
   document.getElementById("room-final-leave-btn").onclick = () => {
     leaveGameRoomForGood();
     renderLeaderboard();
   };
+}
+
+// =====================================================================
+// ---------- Mini-jeux : Pixel Guess (solo & multi, réutilise le salon générique ci-dessus) ----------
+// =====================================================================
+//
+// Contrairement à Quizz Playlist (limité au vinyle/CD pour les questions artiste/année/genre/
+// tracklist), Pixel Guess porte sur n'importe quel objet possédé ayant une image (pochette,
+// jaquette, visuel...) : toutes les catégories sont éligibles.
+//
+// Astuce technique clé : dessiner une image cross-origin sur un petit <canvas> hors-écran puis
+// l'agrandir sans lissage sur le canvas visible est un pur rendu — ça ne nécessite PAS
+// img.crossOrigin="anonymous" (qui casserait le chargement sur les CDN Discogs/TMDB/RAWG,
+// lesquels n'envoient pas d'en-tête Access-Control-Allow-Origin). Le "tainting" cross-origin
+// d'un canvas ne bloque que la LECTURE des pixels (getImageData/toDataURL/toBlob), jamais son
+// affichage ni son utilisation comme source d'un autre dessin.
+
+async function buildPixelGuessPool() {
+  const entries = collectionEntriesCache.length ? collectionEntriesCache : await fetchCollectionEntries();
+  const owned = entries.filter((e) => e.status === "owned" && e.items.cover_image_url);
+  return [...new Map(owned.map((e) => [e.item_id, e.items])).values()];
+}
+
+function normalizeGuess(str) {
+  return String(str || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .replace(/[^a-z0-9]/g, "");
+}
+
+// correspondance tolérante : exact, ou sous-chaîne substantielle (évite d'exiger l'orthographe
+// pile poil du titre complet, tout en évitant qu'un seul mot générique suffise)
+function isCorrectGuess(guess, title) {
+  const g = normalizeGuess(guess);
+  const t = normalizeGuess(title);
+  if (!g || !t) return false;
+  if (g === t) return true;
+  return t.length >= 4 && g.length >= Math.ceil(t.length * 0.6) && (t.includes(g) || g.includes(t));
+}
+
+function buildPixelGuessQuestion(pool) {
+  if (pool.length < 4) return null;
+  const target = pool[Math.floor(Math.random() * pool.length)];
+  return { imageUrl: target.cover_image_url, correctAnswer: target.title };
+}
+
+const pixelGuessImgCache = new Map();
+
+function loadPixelGuessImage(url) {
+  if (pixelGuessImgCache.has(url)) return Promise.resolve(pixelGuessImgCache.get(url));
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      pixelGuessImgCache.set(url, img);
+      resolve(img);
+    };
+    img.onerror = reject;
+    img.src = url;
+  });
+}
+
+async function drawPixelated(canvas, imgUrl, pixelSize) {
+  const img = await loadPixelGuessImage(imgUrl);
+  const off = document.createElement("canvas");
+  off.width = pixelSize;
+  off.height = pixelSize;
+  const offCtx = off.getContext("2d");
+  offCtx.imageSmoothingEnabled = false;
+  const side = Math.min(img.naturalWidth, img.naturalHeight) || 1;
+  const sx = (img.naturalWidth - side) / 2;
+  const sy = (img.naturalHeight - side) / 2;
+  offCtx.drawImage(img, sx, sy, side, side, 0, 0, pixelSize, pixelSize);
+
+  const ctx = canvas.getContext("2d");
+  ctx.imageSmoothingEnabled = false;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(off, 0, 0, pixelSize, pixelSize, 0, 0, canvas.width, canvas.height);
+}
+
+// ---------- Pixel Guess : solo (classé, 5 manches, 3 essais de plus en plus nets) ----------
+const PIXEL_LEVELS = [4, 9, 18]; // taille de grille par essai : très pixelisé -> plus net
+let pixelSoloState = null; // { round, score, pool, attempt, question }
+
+el.pixelguessSoloBtn.addEventListener("click", startPixelGuessSolo);
+
+async function startPixelGuessSolo() {
+  if (!currentUser) return alert("Connecte-toi pour jouer.");
+  leaveGameRoomChannel();
+  const pool = await buildPixelGuessPool();
+  if (pool.length < 4) {
+    el.pixelguessArea.innerHTML = "<p class='empty'>Il te faut au moins 4 objets possédés avec une image pour jouer.</p>";
+    return;
+  }
+  pixelSoloState = { round: 0, score: 0, pool };
+  await nextPixelGuessSoloRound();
+}
+
+async function nextPixelGuessSoloRound() {
+  if (!pixelSoloState) return;
+  pixelSoloState.round++;
+  if (pixelSoloState.round > 5) return finishPixelGuessSolo();
+
+  const question = buildPixelGuessQuestion(pixelSoloState.pool);
+  if (!question) {
+    el.pixelguessArea.innerHTML = "<p class='empty'>Pas assez de données pour continuer, réessaie plus tard.</p>";
+    pixelSoloState = null;
+    return;
+  }
+  pixelSoloState.attempt = 0;
+  pixelSoloState.question = question;
+  renderPixelGuessSoloRound();
+}
+
+function renderPixelGuessSoloRound() {
+  const wrapper = document.createElement("div");
+  wrapper.className = "quiz-round pixelguess-round";
+  wrapper.innerHTML = `
+    <p class="quiz-round-counter">Objet ${pixelSoloState.round}/5 — Score : ${pixelSoloState.score} — Essai ${pixelSoloState.attempt + 1}/3</p>
+    <canvas class="pixelguess-canvas" width="240" height="240"></canvas>
+    <form class="pixelguess-form">
+      <input type="text" class="pixelguess-input" placeholder="Titre de l'objet..." autocomplete="off" />
+      <button type="submit">Valider</button>
+    </form>
+    <p class="pixelguess-feedback"></p>
+  `;
+  el.pixelguessArea.innerHTML = "";
+  el.pixelguessArea.appendChild(wrapper);
+
+  const canvas = wrapper.querySelector(".pixelguess-canvas");
+  const form = wrapper.querySelector(".pixelguess-form");
+  const input = wrapper.querySelector(".pixelguess-input");
+  const feedback = wrapper.querySelector(".pixelguess-feedback");
+  input.focus();
+
+  drawPixelated(canvas, pixelSoloState.question.imageUrl, PIXEL_LEVELS[pixelSoloState.attempt]).catch(() => {
+    feedback.textContent = "Impossible de charger l'image, passage à l'objet suivant.";
+    setTimeout(nextPixelGuessSoloRound, 1500);
+  });
+
+  form.onsubmit = (e) => {
+    e.preventDefault();
+    const guess = input.value.trim();
+    if (!guess) return;
+    const correct = isCorrectGuess(guess, pixelSoloState.question.correctAnswer);
+    if (correct) {
+      const points = 3 - pixelSoloState.attempt;
+      pixelSoloState.score += points;
+      feedback.className = "pixelguess-feedback correct";
+      feedback.textContent = `✅ Bravo, c'était « ${pixelSoloState.question.correctAnswer} » (+${points} pt${points > 1 ? "s" : ""})`;
+      showPixelGuessNextButton(wrapper);
+      return;
+    }
+    pixelSoloState.attempt++;
+    if (pixelSoloState.attempt >= 3) {
+      feedback.className = "pixelguess-feedback incorrect";
+      feedback.textContent = `❌ Perdu, c'était « ${pixelSoloState.question.correctAnswer} »`;
+      showPixelGuessNextButton(wrapper);
+      return;
+    }
+    feedback.className = "pixelguess-feedback incorrect";
+    feedback.textContent = "❌ Pas ça, image un peu plus nette...";
+    input.value = "";
+    input.focus();
+    drawPixelated(canvas, pixelSoloState.question.imageUrl, PIXEL_LEVELS[pixelSoloState.attempt]).catch(() => {});
+    wrapper.querySelector(".quiz-round-counter").textContent =
+      `Objet ${pixelSoloState.round}/5 — Score : ${pixelSoloState.score} — Essai ${pixelSoloState.attempt + 1}/3`;
+  };
+}
+
+function showPixelGuessNextButton(wrapper) {
+  wrapper.querySelector(".pixelguess-form").hidden = true;
+  const nextBtn = document.createElement("button");
+  nextBtn.type = "button";
+  nextBtn.className = "quiz-next-btn";
+  nextBtn.textContent = pixelSoloState.round >= 5 ? "Voir le résultat" : "Objet suivant";
+  nextBtn.onclick = nextPixelGuessSoloRound;
+  wrapper.appendChild(nextBtn);
+}
+
+async function finishPixelGuessSolo() {
+  const score = pixelSoloState.score;
+  await recordGameScore("pixel_guess", score);
+  el.pixelguessArea.innerHTML = `
+    <div class="quiz-result">
+      <p>🎉 Partie terminée : <strong>${score}/15</strong></p>
+      <button type="button" id="pixelguess-replay-btn">Rejouer</button>
+    </div>
+  `;
+  document.getElementById("pixelguess-replay-btn").onclick = startPixelGuessSolo;
+  pixelSoloState = null;
+  renderLeaderboard();
 }
 
 // ---------- helpers ----------
