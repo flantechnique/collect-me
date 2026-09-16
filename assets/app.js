@@ -2297,7 +2297,7 @@ function switchView(view) {
   }
   if (view === "minigames") loadMinigamesView();
   if (view === "playlists") openPlaylistsListView();
-  if (view !== "playlists") leavePlaylistChannel(); // quitte proprement le suivi temps réel de la liste ouverte
+  if (view !== "playlists") closePlaylistDetail(); // quitte proprement le suivi temps réel + l'état de la liste ouverte
   if (view !== "minigames") leaveGameRoomChannel(); // quitte proprement le salon multijoueur si on change de vue
   if (view !== "legal") lastMainView = view;
 }
@@ -2407,7 +2407,7 @@ el.playlistJoinBtn.addEventListener("click", async () => {
 });
 
 el.playlistDetailBackBtn.addEventListener("click", () => {
-  leavePlaylistChannel();
+  closePlaylistDetail();
   openPlaylistsListView();
 });
 
@@ -2580,7 +2580,7 @@ el.playlistDeleteBtn.addEventListener("click", async () => {
   if (!confirm(`Supprimer définitivement la liste "${currentPlaylist.row.name}" ?`)) return;
   const { error } = await sb.from("playlists").delete().eq("id", currentPlaylist.row.id);
   if (error) return alert(error.message);
-  leavePlaylistChannel();
+  closePlaylistDetail();
   openPlaylistsListView();
 });
 
@@ -2592,7 +2592,7 @@ el.playlistLeaveBtn.addEventListener("click", async () => {
     .eq("playlist_id", currentPlaylist.row.id)
     .eq("user_id", currentUser.id);
   if (error) return alert(error.message);
-  leavePlaylistChannel();
+  closePlaylistDetail();
   openPlaylistsListView();
 });
 
@@ -2623,11 +2623,20 @@ function subscribePlaylistChannel(playlistId) {
     .subscribe();
 }
 
+// Ne fait que quitter le canal Realtime — ne touche PAS à currentPlaylist, car cette fonction
+// est aussi appelée par subscribePlaylistChannel() pour nettoyer un abonnement précédent avant
+// de s'abonner au nouveau, alors que currentPlaylist vient justement d'être renseigné pour la
+// liste qu'on est en train d'ouvrir. Utiliser closePlaylistDetail() ci-dessous pour quitter
+// complètement le détail d'une liste (canal + état).
 function leavePlaylistChannel() {
   if (playlistChannel) {
     sb.removeChannel(playlistChannel);
     playlistChannel = null;
   }
+}
+
+function closePlaylistDetail() {
+  leavePlaylistChannel();
   currentPlaylist = null;
 }
 

@@ -1246,7 +1246,8 @@ form#add-item-form button[type="submit"]:hover { background: var(--accent-hover)
 
 /* ---------- formulaires inline (édition d'item, détails de collection) ---------- */
 .edit-item-form,
-.entry-details-form {
+.entry-details-form,
+#playlist-create-form {
   background: var(--bg-soft);
   border: 1px solid var(--border);
   border-radius: 12px;
@@ -1258,7 +1259,8 @@ form#add-item-form button[type="submit"]:hover { background: var(--accent-hover)
 }
 
 .edit-item-form label,
-.entry-details-form label {
+.entry-details-form label,
+#playlist-create-form label {
   display: flex;
   flex-direction: column;
   font-size: 0.8rem;
@@ -1269,13 +1271,16 @@ form#add-item-form button[type="submit"]:hover { background: var(--accent-hover)
   min-width: 140px;
 }
 
-.entry-details-form label.full-width { flex-basis: 100%; }
+.entry-details-form label.full-width,
+#playlist-create-form label.full-width { flex-basis: 100%; }
 
 .edit-item-form input,
 .edit-item-form select,
 .entry-details-form input,
 .entry-details-form select,
-.entry-details-form textarea {
+.entry-details-form textarea,
+#playlist-create-form input,
+#playlist-create-form textarea {
   border-radius: 8px;
   border: 1px solid var(--border);
   background: var(--card);
@@ -1350,7 +1355,8 @@ form#add-item-form button[type="submit"]:hover { background: var(--accent-hover)
 }
 
 .edit-item-form .actions,
-.entry-details-form .actions { flex-basis: 100%; margin-top: 0.25rem; }
+.entry-details-form .actions,
+#playlist-create-form .actions { flex-basis: 100%; margin-top: 0.25rem; }
 
 .ownership-counts {
   color: var(--muted);
