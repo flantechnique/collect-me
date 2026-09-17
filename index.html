@@ -528,6 +528,15 @@
         <p id="account-export-rgpd-status" class="empty" hidden></p>
       </div>
 
+      <div class="stats-section" id="biometric-lock-row" hidden>
+        <h3>🔒 Verrouillage biométrique</h3>
+        <p class="empty">Protège l'accès à l'app avec ton empreinte, ton visage ou le code de ton téléphone : demandé au lancement et à chaque retour au premier plan.</p>
+        <label class="toggle-row">
+          <input id="biometric-lock-toggle" type="checkbox" />
+          Activer le verrouillage biométrique
+        </label>
+      </div>
+
       <div class="stats-section account-danger-zone">
         <h3>🗑️ Supprimer mon compte</h3>
         <p class="empty">Cette action supprime définitivement ton compte, ta collection, ton profil et tes photos. Impossible à annuler.</p>
@@ -783,6 +792,21 @@
       <video id="barcode-scanner-video" playsinline muted></video>
       <p id="barcode-scanner-status" class="barcode-scanner-status">Vise le code-barres avec ta caméra...</p>
     </div>
+  </div>
+
+  <!-- Superposition affichée pendant un scan via le plugin natif ML Kit (app mobile uniquement,
+       Phase 20) : la page devient transparente (voir .native-scanner-active dans style.css) pour
+       laisser voir la caméra native derrière la WebView ; seul ce bouton reste visible par-dessus. -->
+  <div id="native-scan-overlay" class="native-scan-overlay" hidden>
+    <button id="native-scan-cancel-btn" type="button" class="native-scan-cancel-btn">Annuler le scan</button>
+  </div>
+
+  <!-- Écran de verrouillage biométrique (app mobile uniquement, Phase 20) : masque tout le
+       contenu tant que l'authentification n'a pas réussi. Activable depuis "Mon compte". -->
+  <div id="biometric-lock-screen" hidden>
+    <div class="lock-icon">🔒</div>
+    <p>Glanure est verrouillé.</p>
+    <button id="biometric-unlock-retry-btn" type="button">Déverrouiller</button>
   </div>
 
   <div id="game-fullscreen-overlay" class="game-fullscreen-overlay" hidden>
