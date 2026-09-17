@@ -243,6 +243,16 @@ const el = {
   accountEmailInput: document.getElementById("account-email-input"),
   accountEmailStatus: document.getElementById("account-email-status"),
   accountExportBeforeDeleteBtn: document.getElementById("account-export-before-delete-btn"),
+  accountExportRgpdBtn: document.getElementById("account-export-rgpd-btn"),
+  accountExportRgpdStatus: document.getElementById("account-export-rgpd-status"),
+  onboardingModal: document.getElementById("onboarding-modal"),
+  onboardingHelpBtn: document.getElementById("onboarding-help-btn"),
+  onboardingClose: document.getElementById("onboarding-close"),
+  onboardingSteps: document.getElementById("onboarding-steps"),
+  onboardingDots: document.getElementById("onboarding-dots"),
+  onboardingPrevBtn: document.getElementById("onboarding-prev-btn"),
+  onboardingNextBtn: document.getElementById("onboarding-next-btn"),
+  onboardingSkipBtn: document.getElementById("onboarding-skip-btn"),
   accountDeleteForm: document.getElementById("account-delete-form"),
   accountDeleteConfirmInput: document.getElementById("account-delete-confirm-input"),
   accountDeleteSubmitBtn: document.getElementById("account-delete-submit-btn"),
@@ -575,8 +585,9 @@ async function initAuth() {
   setupNativePush();
   setupNativeAuthCallback();
   setupNativeShortcuts();
+  maybeShowOnboardingForNewUser();
 
-  sb.auth.onAuthStateChange((_event, session) => {
+  sb.auth.onAuthStateChange((event, session) => {
     currentUser = session?.user ?? null;
     renderAuth();
     if (categories.length) renderCategoryGrid(); // affiche/masque la tuile "Nouvelle collection" selon la connexion
@@ -585,8 +596,74 @@ async function initAuth() {
     renderHomeActivity();
     if (currentUser) loadMyCollection();
     setupNativePush();
+    if (event === "SIGNED_IN") maybeShowOnboardingForNewUser();
   });
 }
+
+// ---------- guide de démarrage ("onboarding", Phase 19) ----------
+// Modale multi-étapes montrée une seule fois, à la première connexion détectée (flag
+// localStorage — un simple repère d'affichage local, pas une donnée utilisateur à
+// synchroniser), et réouvrable à tout moment via le bouton ❓ de l'en-tête.
+const ONBOARDING_SEEN_KEY = "glanure-onboarding-seen";
+let onboardingStepIndex = 0;
+const onboardingStepEls = () => Array.from(el.onboardingSteps.querySelectorAll(".onboarding-step"));
+
+function renderOnboardingStep() {
+  const steps = onboardingStepEls();
+  steps.forEach((step, i) => {
+    step.hidden = i !== onboardingStepIndex;
+  });
+  el.onboardingDots.innerHTML = steps
+    .map((_, i) => `<span class="${i === onboardingStepIndex ? "active" : ""}"></span>`)
+    .join("");
+  el.onboardingPrevBtn.hidden = onboardingStepIndex === 0;
+  el.onboardingNextBtn.textContent = onboardingStepIndex === steps.length - 1 ? "C'est parti !" : "Suivant →";
+}
+
+function openOnboarding() {
+  onboardingStepIndex = 0;
+  renderOnboardingStep();
+  el.onboardingModal.hidden = false;
+}
+
+function closeOnboarding() {
+  el.onboardingModal.hidden = true;
+  try {
+    localStorage.setItem(ONBOARDING_SEEN_KEY, "1");
+  } catch (_e) {
+    // navigation privée stricte ou stockage plein : tant pis, le guide se réaffichera au
+    // prochain chargement — non bloquant, et réouvrable manuellement de toute façon
+  }
+}
+
+function maybeShowOnboardingForNewUser() {
+  if (!currentUser) return;
+  try {
+    if (localStorage.getItem(ONBOARDING_SEEN_KEY)) return;
+  } catch (_e) {
+    return; // pas de guide forcé si le stockage local est inaccessible
+  }
+  openOnboarding();
+}
+
+el.onboardingHelpBtn.addEventListener("click", openOnboarding);
+el.onboardingClose.addEventListener("click", closeOnboarding);
+el.onboardingSkipBtn.addEventListener("click", closeOnboarding);
+el.onboardingPrevBtn.addEventListener("click", () => {
+  if (onboardingStepIndex > 0) {
+    onboardingStepIndex--;
+    renderOnboardingStep();
+  }
+});
+el.onboardingNextBtn.addEventListener("click", () => {
+  const steps = onboardingStepEls();
+  if (onboardingStepIndex < steps.length - 1) {
+    onboardingStepIndex++;
+    renderOnboardingStep();
+  } else {
+    closeOnboarding();
+  }
+});
 
 // ---------- notifications push natives (Phase 13, wrapper mobile Capacitor) ----------
 // N'a d'effet que dans l'app mobile : `window.Capacitor` n'existe pas du tout sur le site web
@@ -4155,23 +4232,44 @@ function exportPdfReport() {
     return alert("Rien à mettre dans le rapport : aucun item possédé ou à vendre pour l'instant.");
   }
 
-  const { jsPDF } = window.jspdf;
-  const doc = new jsPDF({ unit: "pt" });
-  const pageWidth = doc.internal.pageSize.getWidth();
-  const marginX = 40;
-  let y = 50;
+  el.statsExportPdfBtn.disabled = true;
+  buildPdfReportRows(owned)
+    .then((report) => renderPdfReport(report))
+    .finally(() => {
+      el.statsExportPdfBtn.disabled = false;
+    });
+}
 
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(18);
-  doc.text("Rapport de collection — Glanure", marginX, y);
-  y += 22;
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(10);
-  doc.setTextColor(120);
-  doc.text(`Généré le ${new Date().toLocaleDateString("fr-FR")} · ${owned.length} exemplaire${owned.length > 1 ? "s" : ""}`, marginX, y);
-  doc.setTextColor(0);
-  y += 24;
+// Précharge les photos de couverture en dataURL — jsPDF ne peut dessiner une image que depuis
+// une dataURL/un ArrayBuffer, jamais depuis une URL distante directement. Best-effort : une
+// image qui échoue (CORS, 404...) est simplement omise de sa ligne plutôt que de faire
+// échouer tout le rapport (Phase 19, enrichissement "façon inventaire d'assurance").
+async function preloadCoverImages(urls) {
+  const unique = [...new Set(urls.filter(Boolean))];
+  const map = new Map();
+  await Promise.all(
+    unique.map(async (url) => {
+      try {
+        const res = await fetch(url, { mode: "cors" });
+        if (!res.ok) return;
+        const blob = await res.blob();
+        const dataUrl = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result);
+          reader.onerror = reject;
+          reader.readAsDataURL(blob);
+        });
+        map.set(url, dataUrl);
+      } catch (_e) {
+        // photo ignorée dans le rapport, le reste de la ligne reste affiché
+      }
+    })
+  );
+  return map;
+}
 
+async function buildPdfReportRows(owned) {
+  const imageMap = await preloadCoverImages(owned.map((e) => e.items.cover_image_url));
   let totalEUR = 0;
   let totalUSD = 0;
   let valuedCount = 0;
@@ -4193,23 +4291,61 @@ function exportPdfReport() {
       category: e.items.categories.name,
       condition: e.condition ?? "",
       status: e.status === "for_sale" ? "À vendre" : "Possédé",
+      acquiredAt: e.acquired_at ? new Date(e.acquired_at).toLocaleDateString("fr-FR") : "",
       value: value ? `${value.amount.toFixed(2)} ${value.currency === "USD" ? "$" : "€"}` : "—",
+      image: imageMap.get(e.items.cover_image_url) ?? null,
     };
   });
+  return { rows, totalEUR, totalUSD, valuedCount, count: owned.length };
+}
+
+function renderPdfReport({ rows, totalEUR, totalUSD, valuedCount, count }) {
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ unit: "pt" });
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const marginX = 40;
+  let y = 50;
+
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(18);
+  doc.text("Rapport de collection — Glanure", marginX, y);
+  y += 22;
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(10);
+  doc.setTextColor(120);
+  doc.text(
+    `Généré le ${new Date().toLocaleDateString("fr-FR")} · ${count} exemplaire${count > 1 ? "s" : ""} · pense-bête pour une déclaration d'assurance`,
+    marginX,
+    y
+  );
+  doc.setTextColor(0);
+  y += 24;
 
   doc.setFont("helvetica", "bold");
   doc.setFontSize(12);
-  doc.text(`Valeur totale estimée : ${formatMixedCurrencyValue(totalEUR, totalUSD)} (${valuedCount}/${owned.length} valorisés)`, marginX, y);
+  doc.text(`Valeur totale estimée : ${formatMixedCurrencyValue(totalEUR, totalUSD)} (${valuedCount}/${count} valorisés)`, marginX, y);
   y += 18;
 
   if (typeof doc.autoTable === "function") {
     doc.autoTable({
       startY: y,
       margin: { left: marginX, right: marginX },
-      head: [["Item", "Catégorie", "État", "Statut", "Valeur"]],
-      body: rows.map((r) => [r.title, r.category, r.condition, r.status, r.value]),
-      styles: { fontSize: 9, cellPadding: 5 },
+      head: [["Photo", "Item", "Catégorie", "État", "Statut", "Acquis le", "Valeur"]],
+      body: rows.map((r) => ["", r.title, r.category, r.condition, r.status, r.acquiredAt, r.value]),
+      styles: { fontSize: 9, cellPadding: 5, minCellHeight: 34, valign: "middle" },
       headStyles: { fillColor: [201, 106, 63] },
+      columnStyles: { 0: { cellWidth: 34 } },
+      didDrawCell: (data) => {
+        if (data.section !== "body" || data.column.index !== 0) return;
+        const img = rows[data.row.index]?.image;
+        if (!img) return;
+        const size = 26;
+        try {
+          doc.addImage(img, data.cell.x + 3, data.cell.y + (data.cell.height - size) / 2, size, size);
+        } catch (_e) {
+          // format d'image non supporté par jsPDF (rare) : cellule laissée vide
+        }
+      },
     });
   } else {
     // repli sans plugin autoTable (pas chargé) : liste texte simple, toujours fonctionnel
@@ -4220,7 +4356,8 @@ function exportPdfReport() {
         doc.addPage();
         y = 40;
       }
-      doc.text(`${r.title} — ${r.category} — ${r.condition || "état non précisé"} — ${r.status} — ${r.value}`, marginX, y, {
+      const acquired = r.acquiredAt ? ` — acquis le ${r.acquiredAt}` : "";
+      doc.text(`${r.title} — ${r.category} — ${r.condition || "état non précisé"} — ${r.status}${acquired} — ${r.value}`, marginX, y, {
         maxWidth: pageWidth - marginX * 2,
       });
       y += 16;
@@ -5114,21 +5251,54 @@ el.accountEmailForm.addEventListener("submit", async (e) => {
   el.accountEmailStatus.hidden = false;
 });
 
-// ---- suppression du compte : export préalable optionnel, puis appel à la edge function
-// "delete-account" (seule capable de supprimer le compte auth.users lui-même, la clé anonyme
-// ne le permettant pas) ----
-el.accountExportBeforeDeleteBtn.addEventListener("click", async () => {
-  const { data: entries } = await sb
-    .from("collection_entries")
-    .select("*, items(*, categories(*))")
-    .eq("user_id", currentUser.id);
-  const { data: profile } = await sb
-    .from("profiles")
-    .select("*")
-    .eq("id", currentUser.id)
-    .maybeSingle();
-  const data = {
-    compte: { email: currentUser.email, id: currentUser.id },
+// ---------- export complet des données personnelles (RGPD, Phase 19) ----------
+// Va au-delà de la simple collection (déjà couverte par le CSV/JSON de l'onglet
+// Statistiques) : rassemble tout ce qui est rattaché au compte au sens du RGPD — profil,
+// collection avec dates d'acquisition, artistes suivis, comptes suivis/abonnés, listes
+// possédées ou rejointes, historique des mini-jeux, réactions/commentaires laissés sur les
+// vitrines d'autres collectionneurs, et réservations de cadeaux faites chez d'autres.
+// Une seule fonction partagée, utilisée à la fois par le bouton dédié "Mon compte" et par
+// l'export préalable à la suppression du compte, pour ne maintenir la liste des tables
+// qu'à un seul endroit.
+async function buildFullAccountExportData() {
+  const [
+    { data: profile },
+    { data: entries },
+    { data: followedCreators },
+    { data: following },
+    { data: followers },
+    { data: ownedPlaylists },
+    { data: memberPlaylistRows },
+    { data: scoreEvents },
+    { data: reactionsGiven },
+    { data: commentsGiven },
+    { data: reservationsMade },
+  ] = await Promise.all([
+    sb.from("profiles").select("*").eq("id", currentUser.id).maybeSingle(),
+    sb.from("collection_entries").select("*, items(*, categories(*))").eq("user_id", currentUser.id),
+    sb.from("followed_creators").select("*").eq("user_id", currentUser.id),
+    sb.from("user_follows").select("followed_id, created_at").eq("follower_id", currentUser.id),
+    sb.from("user_follows").select("follower_id, created_at").eq("followed_id", currentUser.id),
+    sb.from("playlists").select("*").eq("owner_user_id", currentUser.id),
+    sb.from("playlist_members").select("playlists(*), joined_at").eq("user_id", currentUser.id),
+    sb.from("game_score_events").select("*").eq("user_id", currentUser.id),
+    sb.from("showcase_reactions").select("*").eq("actor_id", currentUser.id),
+    sb.from("showcase_comments").select("*").eq("actor_id", currentUser.id),
+    sb.from("wishlist_reservations").select("*").eq("reserved_by", currentUser.id),
+  ]);
+
+  let ownedPlaylistItems = [];
+  if (ownedPlaylists?.length) {
+    const { data } = await sb
+      .from("playlist_items")
+      .select("*, items(title)")
+      .in("playlist_id", ownedPlaylists.map((p) => p.id));
+    ownedPlaylistItems = data ?? [];
+  }
+
+  return {
+    export_genere_le: new Date().toISOString(),
+    compte: { email: currentUser.email, id: currentUser.id, cree_le: currentUser.created_at },
     profil: profile ?? null,
     collection: (entries ?? []).map((e) => ({
       titre: e.items.title,
@@ -5141,8 +5311,45 @@ el.accountExportBeforeDeleteBtn.addEventListener("click", async () => {
       notes: e.notes,
       attributs: e.items.attributes,
     })),
+    createurs_suivis: followedCreators ?? [],
+    comptes_suivis: following ?? [],
+    abonnes: followers ?? [],
+    listes_possedees: (ownedPlaylists ?? []).map((p) => ({
+      ...p,
+      items: ownedPlaylistItems.filter((pi) => pi.playlist_id === p.id).map((pi) => pi.items?.title ?? pi.item_id),
+    })),
+    listes_rejointes: (memberPlaylistRows ?? []).map((r) => r.playlists).filter(Boolean),
+    parties_mini_jeux: scoreEvents ?? [],
+    reactions_laissees: reactionsGiven ?? [],
+    commentaires_laisses: commentsGiven ?? [],
+    reservations_cadeaux_faites: reservationsMade ?? [],
   };
-  triggerDownload(JSON.stringify(data, null, 2), "mes-donnees-collect-me.json", "application/json;charset=utf-8;");
+}
+
+el.accountExportRgpdBtn.addEventListener("click", async () => {
+  el.accountExportRgpdStatus.hidden = true;
+  el.accountExportRgpdBtn.disabled = true;
+  try {
+    const data = await buildFullAccountExportData();
+    triggerDownload(
+      JSON.stringify(data, null, 2),
+      `mes-donnees-glanure-${new Date().toISOString().slice(0, 10)}.json`,
+      "application/json;charset=utf-8;"
+    );
+  } catch (err) {
+    el.accountExportRgpdStatus.textContent = "Erreur pendant l'export : " + err.message;
+    el.accountExportRgpdStatus.hidden = false;
+  } finally {
+    el.accountExportRgpdBtn.disabled = false;
+  }
+});
+
+// ---- suppression du compte : export préalable optionnel, puis appel à la edge function
+// "delete-account" (seule capable de supprimer le compte auth.users lui-même, la clé anonyme
+// ne le permettant pas) ----
+el.accountExportBeforeDeleteBtn.addEventListener("click", async () => {
+  const data = await buildFullAccountExportData();
+  triggerDownload(JSON.stringify(data, null, 2), "mes-donnees-glanure.json", "application/json;charset=utf-8;");
 });
 
 el.accountDeleteConfirmInput.addEventListener("input", () => {

@@ -2844,6 +2844,31 @@ body.game-fullscreen-lock { overflow: hidden; }
 
 .auth-modal-box h3 { margin: 0 0 1rem; }
 
+/* ---------- modale de guide de démarrage ("onboarding", Phase 19) ---------- */
+.onboarding-box { max-width: 420px; }
+.onboarding-step p { color: var(--muted); line-height: 1.5; }
+.onboarding-dots {
+  display: flex;
+  justify-content: center;
+  gap: 0.4rem;
+  margin: 1.2rem 0;
+}
+.onboarding-dots span {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--border);
+  display: inline-block;
+}
+.onboarding-dots span.active { background: var(--accent); }
+.onboarding-nav {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.6rem;
+}
+.onboarding-nav #onboarding-next-btn { margin-left: auto; }
+
 #auth-modal-form {
   display: flex;
   flex-direction: column;
