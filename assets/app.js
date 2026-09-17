@@ -114,6 +114,12 @@ const el = {
   barcodeScannerVideo: document.getElementById("barcode-scanner-video"),
   barcodeScannerStatus: document.getElementById("barcode-scanner-status"),
   barcodeScannerClose: document.getElementById("barcode-scanner-close"),
+  nativeScanOverlay: document.getElementById("native-scan-overlay"),
+  nativeScanCancelBtn: document.getElementById("native-scan-cancel-btn"),
+  biometricLockRow: document.getElementById("biometric-lock-row"),
+  biometricLockToggle: document.getElementById("biometric-lock-toggle"),
+  biometricLockScreen: document.getElementById("biometric-lock-screen"),
+  biometricUnlockRetryBtn: document.getElementById("biometric-unlock-retry-btn"),
   csvTemplateBtn: document.getElementById("csv-template-btn"),
   csvImportBtn: document.getElementById("csv-import-btn"),
   csvImportInput: document.getElementById("csv-import-input"),
@@ -586,6 +592,8 @@ async function initAuth() {
   setupNativePush();
   setupNativeAuthCallback();
   setupNativeShortcuts();
+  setupBiometricLock();
+  setupBiometricLockToggle();
   maybeShowOnboardingForNewUser();
   renderOfflineSyncBadge();
   flushPendingAdds();
@@ -799,6 +807,129 @@ function openQuickScanShortcut() {
   switchView("catalogue");
   selectCategory(slug);
   setTimeout(() => openBarcodeScanner(), 300);
+}
+
+// ---------- verrouillage biométrique (Phase 20, wrapper mobile Capacitor) ----------
+// Option désactivée par défaut, activable depuis "Mon compte" (uniquement visible dans l'app
+// native). Une fois activée, un écran de verrouillage plein écran couvre le contenu au lancement
+// de l'app et à chaque retour au premier plan (l'utilisateur avait changé d'appli ou verrouillé
+// son téléphone entretemps), et ne le retire qu'après authentification biométrique réussie
+// (empreinte, visage ou, en secours, le code/schéma de l'appareil). Utile car le cache
+// hors-ligne (Phase 15bis) laisse la collection consultable même sans reconnexion Supabase.
+// Repose sur le plugin `@capgo/capacitor-native-biometric` — voir le README du wrapper mobile
+// pour l'installation côté natif Android. Si le plugin natif n'est pas installé, on ne bloque
+// jamais l'accès (un verrou absent vaut mieux qu'un verrou cassé qui enfermerait l'utilisateur
+// hors de sa propre collection) : le réglage reste simplement caché dans ce cas.
+const BIOMETRIC_LOCK_KEY = "glanure-biometric-lock-enabled";
+let biometricLockSetup = false;
+let biometricUnlocked = false; // vrai une fois l'authentification réussie pour la session en cours
+let appWasActive = true; // on part du principe que l'app est déjà au premier plan au démarrage
+
+function isBiometricLockEnabled() {
+  try {
+    return localStorage.getItem(BIOMETRIC_LOCK_KEY) === "1";
+  } catch (_e) {
+    return false;
+  }
+}
+
+function setBiometricLockEnabled(enabled) {
+  try {
+    localStorage.setItem(BIOMETRIC_LOCK_KEY, enabled ? "1" : "0");
+  } catch (_e) {
+    // best-effort : au pire l'option reviendra désactivée au prochain lancement
+  }
+}
+
+function renderBiometricLockScreen() {
+  if (!el.biometricLockScreen) return;
+  el.biometricLockScreen.hidden = biometricUnlocked;
+}
+
+async function attemptBiometricUnlock() {
+  const NativeBiometric = window.Capacitor?.Plugins?.NativeBiometric;
+  if (!NativeBiometric) {
+    biometricUnlocked = true; // plugin absent : ne pas enfermer l'utilisateur hors de l'app
+    renderBiometricLockScreen();
+    return;
+  }
+  try {
+    const { isAvailable } = await NativeBiometric.isAvailable();
+    if (!isAvailable) {
+      biometricUnlocked = true; // aucune biométrie configurée sur l'appareil : idem
+      renderBiometricLockScreen();
+      return;
+    }
+    await NativeBiometric.verifyIdentity({
+      reason: "Déverrouille Glanure",
+      title: "Glanure verrouillé",
+      subtitle: "Authentifie-toi pour accéder à ta collection",
+      negativeButtonText: "Annuler",
+      useFallback: true, // autorise le code/schéma de l'appareil si la biométrie échoue/est absente
+    });
+    biometricUnlocked = true;
+  } catch (err) {
+    console.error("NativeBiometric.verifyIdentity", err);
+    biometricUnlocked = false; // annulé ou échoué : l'écran de verrouillage reste affiché
+  }
+  renderBiometricLockScreen();
+}
+
+function setupBiometricLock() {
+  if (!window.Capacitor?.isNativePlatform?.() || biometricLockSetup) return;
+  biometricLockSetup = true;
+
+  if (isBiometricLockEnabled()) attemptBiometricUnlock();
+
+  window.Capacitor.Plugins?.App?.addListener("appStateChange", ({ isActive }) => {
+    if (isActive && !appWasActive && isBiometricLockEnabled()) {
+      biometricUnlocked = false;
+      renderBiometricLockScreen();
+      attemptBiometricUnlock();
+    }
+    appWasActive = isActive;
+  });
+
+  el.biometricUnlockRetryBtn?.addEventListener("click", attemptBiometricUnlock);
+}
+
+// Réglage dans "Mon compte" : caché en dehors de l'app native. L'activation exige de réussir
+// une authentification biométrique immédiate (on ne veut pas d'un interrupteur qui s'active sans
+// jamais avoir prouvé que la biométrie fonctionne sur l'appareil).
+function setupBiometricLockToggle() {
+  if (!el.biometricLockToggle) return;
+  if (!window.Capacitor?.isNativePlatform?.()) {
+    el.biometricLockRow?.setAttribute("hidden", "");
+    return;
+  }
+  el.biometricLockRow?.removeAttribute("hidden");
+  el.biometricLockToggle.checked = isBiometricLockEnabled();
+
+  el.biometricLockToggle.addEventListener("change", async () => {
+    if (!el.biometricLockToggle.checked) {
+      setBiometricLockEnabled(false);
+      return;
+    }
+    const NativeBiometric = window.Capacitor?.Plugins?.NativeBiometric;
+    try {
+      const { isAvailable } = (await NativeBiometric?.isAvailable()) ?? {};
+      if (!isAvailable) {
+        alert(
+          "Aucune biométrie n'est configurée sur cet appareil (empreinte, visage...). Configure-la dans les réglages Android avant d'activer cette option."
+        );
+        el.biometricLockToggle.checked = false;
+        return;
+      }
+      await NativeBiometric.verifyIdentity({
+        reason: "Confirme pour activer le verrouillage",
+        title: "Activer le verrouillage biométrique",
+      });
+      setBiometricLockEnabled(true);
+    } catch (err) {
+      console.error("Activation du verrouillage biométrique", err);
+      el.biometricLockToggle.checked = false;
+    }
+  });
 }
 
 // Un seul point d'entrée dans l'en-tête ("Se connecter" déconnecté, "Profil ▾" connecté) au
@@ -2160,6 +2291,35 @@ function writeCollectionCache(userId, data) {
   }
 }
 
+// ---------- widget d'écran d'accueil Android (Phase 20, wrapper mobile Capacitor) ----------
+// L'app écrit un petit résumé (nombre d'items possédés + titre du dernier ajouté) via le plugin
+// `@capacitor/preferences`. Ce plugin stocke ses données côté Android dans un fichier
+// SharedPreferences nommé "CapacitorStorage" (le comportement par défaut du plugin, non
+// documenté dans l'API JS mais visible dans son code source natif) — un widget natif
+// (`AppWidgetProvider`, à ajouter côté natif, voir le README du wrapper mobile) peut donc lire
+// ce résumé directement, sans dépendre de la webview pour être à jour, y compris quand l'app
+// est fermée. Aucune préférence spécifique n'ayant été indiquée pour le contenu du widget, le
+// choix retenu (nombre total d'items possédés + dernier ajout) reprend ce qu'affiche déjà "Mes
+// derniers ajouts" sur l'accueil. Sans effet sur le site web ni si le plugin natif n'est pas
+// installé.
+const WIDGET_SUMMARY_KEY = "glanure_widget_summary";
+
+async function updateHomeWidgetSummary(entries) {
+  const Preferences = window.Capacitor?.Plugins?.Preferences;
+  if (!window.Capacitor?.isNativePlatform?.() || !Preferences) return;
+  const owned = entries.filter((e) => e.status === "owned" || e.status === "for_sale");
+  const summary = {
+    count: owned.length,
+    latestTitle: owned[0]?.items?.title ?? null,
+    updatedAt: new Date().toISOString(),
+  };
+  try {
+    await Preferences.set({ key: WIDGET_SUMMARY_KEY, value: JSON.stringify(summary) });
+  } catch (err) {
+    console.error("Preferences.set (résumé widget)", err);
+  }
+}
+
 async function loadMyCollection() {
   if (!currentUser) {
     el.collectionList.innerHTML = "<p class='empty'>Connecte-toi pour voir ta collection.</p>";
@@ -2182,6 +2342,7 @@ async function loadMyCollection() {
     writeCollectionCache(currentUser.id, data);
   }
   el.collectionOfflineNotice.hidden = !offline;
+  updateHomeWidgetSummary(data);
 
   await fetchItemPriceStats(data.map((entry) => entry.item_id));
 
@@ -3732,10 +3893,112 @@ let barcodeReader = null;
 el.barcodeScanBtn.addEventListener("click", openBarcodeScanner);
 el.barcodeScannerClose.addEventListener("click", closeBarcodeScanner);
 
+// ---------- scanner de code-barres natif (Phase 20, wrapper mobile Capacitor) ----------
+// Sur le web, `openBarcodeScanner()` ci-dessous utilise ZXing (caméra via getUserMedia dans une
+// modale HTML). Dans l'app mobile native, on préfère le plugin `@capacitor-mlkit/barcode-scanning`
+// (Google ML Kit) quand il est disponible : détection plus rapide et plus fiable, et gestion native
+// des autorisations caméra Android — voir le README du wrapper mobile pour l'installation côté
+// natif. Jamais utilisé sur le site web classique (le plugin n'existe pas en dehors de l'app).
+//
+// Le plugin ML Kit affiche la prévisualisation caméra native *derrière* la WebView : il faut donc
+// rendre la page transparente pendant le scan (classe CSS `native-scanner-active`, voir style.css)
+// pour que l'utilisateur voie la caméra, avec une petite superposition (bouton "Annuler") qui reste
+// visible par-dessus.
+//
+// Retourne : { ok:true, code } en cas de succès, { ok:false, reason:"cancelled" } si l'utilisateur
+// annule, { ok:false, reason:"denied" } si la permission caméra est refusée, ou
+// { ok:false, reason:"unavailable" } si le plugin natif n'est pas installé/disponible — dans ce
+// dernier cas, `openBarcodeScanner()` retombe automatiquement sur ZXing juste en dessous.
+async function scanWithNativeBarcodeScanner() {
+  const BarcodeScanner = window.Capacitor?.Plugins?.BarcodeScanner;
+  if (!window.Capacitor?.isNativePlatform?.() || !BarcodeScanner) {
+    return { ok: false, reason: "unavailable" };
+  }
+
+  try {
+    const perms = await BarcodeScanner.checkPermissions();
+    if (perms?.camera !== "granted") {
+      const after = await BarcodeScanner.requestPermissions();
+      if (after?.camera !== "granted") return { ok: false, reason: "denied" };
+    }
+  } catch (err) {
+    console.error("BarcodeScanner (permissions)", err);
+    return { ok: false, reason: "unavailable" };
+  }
+
+  return new Promise((resolve) => {
+    let listenerHandle = null;
+    let settled = false;
+
+    const finish = async (result) => {
+      if (settled) return;
+      settled = true;
+      document.body.classList.remove("native-scanner-active");
+      el.nativeScanOverlay.hidden = true;
+      el.nativeScanCancelBtn.removeEventListener("click", onCancel);
+      try {
+        await listenerHandle?.remove();
+      } catch (_e) {
+        // déjà retiré ou plugin déjà arrêté : sans conséquence
+      }
+      try {
+        await BarcodeScanner.stopScan();
+      } catch (_e) {
+        // rien à arrêter si le scan n'a jamais démarré
+      }
+      resolve(result);
+    };
+
+    const onCancel = () => finish({ ok: false, reason: "cancelled" });
+
+    document.body.classList.add("native-scanner-active");
+    el.nativeScanOverlay.hidden = false;
+    el.nativeScanCancelBtn.addEventListener("click", onCancel);
+
+    BarcodeScanner.addListener("barcodeScanned", (event) => {
+      const code = event?.barcode?.rawValue ?? event?.barcode?.displayValue;
+      if (code) finish({ ok: true, code });
+    })
+      .then((handle) => {
+        listenerHandle = handle;
+      })
+      .catch((err) => {
+        console.error("BarcodeScanner (listener)", err);
+        finish({ ok: false, reason: "unavailable" });
+      });
+
+    BarcodeScanner.startScan().catch((err) => {
+      console.error("BarcodeScanner (startScan)", err);
+      finish({ ok: false, reason: "unavailable" });
+    });
+  });
+}
+
 async function openBarcodeScanner() {
   const cat = currentCategory();
   const lookup = BARCODE_LOOKUP[cat?.slug];
   if (!lookup) return;
+
+  if (window.Capacitor?.isNativePlatform?.()) {
+    const result = await scanWithNativeBarcodeScanner();
+    if (result.reason !== "unavailable") {
+      if (result.ok) {
+        try {
+          localStorage.setItem("glanure-last-scan-category", cat.slug);
+        } catch (_e) {
+          // best-effort seulement (utilisé par le raccourci "Scan rapide", Phase 20)
+        }
+        searchByBarcode(result.code, cat, lookup);
+      } else if (result.reason === "denied") {
+        alert(
+          "Autorisation caméra refusée. Active-la dans les réglages Android de l'app (Paramètres > Applications > Glanure > Autorisations) pour scanner un code-barres."
+        );
+      }
+      // "cancelled" : l'utilisateur a annulé volontairement, rien à faire de plus
+      return;
+    }
+    // "unavailable" : pas de plugin natif installé côté Android → on retombe sur ZXing ci-dessous
+  }
 
   if (typeof ZXing === "undefined") {
     alert("Le lecteur de code-barres n'a pas pu se charger. Vérifie ta connexion et réessaie.");

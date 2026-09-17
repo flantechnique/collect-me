@@ -209,6 +209,68 @@ header h1 { font-size: 1.4rem; margin: 0; letter-spacing: 0.01em; }
   cursor: pointer;
 }
 
+/* ---------- verrouillage biométrique (app mobile, Phase 20) ---------- */
+.toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.toggle-row input[type="checkbox"] {
+  width: 1.2rem;
+  height: 1.2rem;
+  cursor: pointer;
+}
+#biometric-lock-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 9998;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1.2rem;
+  background: var(--bg);
+  color: var(--text);
+  text-align: center;
+  padding: 2rem;
+}
+#biometric-lock-screen .lock-icon { font-size: 3rem; }
+
+/* ---------- scanner de code-barres natif ML Kit (app mobile, Phase 20) ---------- */
+/* Le plugin `@capacitor-mlkit/barcode-scanning` affiche la caméra native *derrière* la WebView :
+   il faut donc rendre toute la page transparente pendant le scan pour que la caméra soit visible,
+   tout en gardant un petit bouton "Annuler" par-dessus (qui réaffirme sa propre visibilité). Sans
+   effet en dehors de l'app native (la classe n'est jamais ajoutée sur le site web). */
+body.native-scanner-active {
+  visibility: hidden;
+  background: transparent !important;
+}
+.native-scan-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding-bottom: max(2.5rem, env(safe-area-inset-bottom));
+  background: transparent;
+}
+body.native-scanner-active .native-scan-overlay {
+  visibility: visible;
+}
+.native-scan-cancel-btn {
+  border: none;
+  border-radius: 999px;
+  background: rgba(20, 20, 20, 0.85);
+  color: #fff;
+  font-weight: 700;
+  font-size: 0.95rem;
+  padding: 0.75rem 1.6rem;
+  cursor: pointer;
+}
+
 nav.main-nav {
   display: flex;
   gap: 0.6rem;
