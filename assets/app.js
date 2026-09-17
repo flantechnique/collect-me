@@ -252,6 +252,12 @@ const el = {
   accountExportBeforeDeleteBtn: document.getElementById("account-export-before-delete-btn"),
   accountExportRgpdBtn: document.getElementById("account-export-rgpd-btn"),
   accountExportRgpdStatus: document.getElementById("account-export-rgpd-status"),
+  glanureMaxStatus: document.getElementById("glanure-max-status"),
+  glanureMaxOffer: document.getElementById("glanure-max-offer"),
+  glanureMaxManage: document.getElementById("glanure-max-manage"),
+  glanureMaxSubscribeBtn: document.getElementById("glanure-max-subscribe-btn"),
+  glanureMaxManageBtn: document.getElementById("glanure-max-manage-btn"),
+  glanureMaxActionStatus: document.getElementById("glanure-max-action-status"),
   onboardingModal: document.getElementById("onboarding-modal"),
   onboardingHelpBtn: document.getElementById("onboarding-help-btn"),
   onboardingClose: document.getElementById("onboarding-close"),
@@ -589,6 +595,7 @@ async function initAuth() {
   const { data: { session } } = await sb.auth.getSession();
   currentUser = session?.user ?? null;
   renderAuth();
+  handleGlanureMaxCheckoutRedirect();
   setupNativePush();
   setupNativeAuthCallback();
   setupNativeShortcuts();
@@ -5290,6 +5297,8 @@ async function openAccountView() {
   el.accountDeleteConfirmInput.value = "";
   el.accountDeleteSubmitBtn.disabled = true;
   el.accountDeleteStatus.hidden = true;
+
+  loadGlanureMaxStatus();
 }
 
 function setAccountImagePreview(imgEl, url) {
@@ -5722,6 +5731,96 @@ el.accountExportRgpdBtn.addEventListener("click", async () => {
     el.accountExportRgpdBtn.disabled = false;
   }
 });
+
+// ---- "Glanure Max" : statut d'abonnement + Stripe Checkout/Portal (étape 2 du plan de
+// monétisation, voir claude/notes.md du projet) ----
+// get_account_monetization_status() (fonction Postgres SECURITY DEFINER, étape 1) donne en un
+// seul appel le statut Max, le quota d'imports du mois et les soldes crédits/Perles.
+async function loadGlanureMaxStatus() {
+  el.glanureMaxActionStatus.hidden = true;
+  const { data, error } = await sb.rpc("get_account_monetization_status");
+  if (error) {
+    el.glanureMaxStatus.textContent = "Impossible de charger le statut de l'abonnement pour le moment.";
+    el.glanureMaxStatus.hidden = false;
+    return;
+  }
+  const isMax = data?.is_glanure_max ?? false;
+  el.glanureMaxOffer.hidden = isMax;
+  el.glanureMaxManage.hidden = !isMax;
+  el.glanureMaxStatus.textContent =
+    (isMax ? "✨ Glanure Max actif — " : "Compte gratuit — ") +
+    `${data.import_used}/${data.import_quota} imports automatiques utilisés ce mois-ci, ` +
+    `${data.import_credits_balance} crédit${data.import_credits_balance > 1 ? "s" : ""} d'import en réserve, ` +
+    `${data.perles_balance} Perle${data.perles_balance > 1 ? "s" : ""}.`;
+  el.glanureMaxStatus.hidden = false;
+}
+
+el.glanureMaxSubscribeBtn.addEventListener("click", async () => {
+  const { data: { session } } = await sb.auth.getSession();
+  if (!session) return;
+  const plan = document.querySelector('input[name="glanure-max-plan"]:checked')?.value === "year" ? "year" : "month";
+  el.glanureMaxSubscribeBtn.disabled = true;
+  el.glanureMaxActionStatus.hidden = false;
+  el.glanureMaxActionStatus.textContent = "Redirection vers le paiement sécurisé...";
+  try {
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/stripe-checkout`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${session.access_token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ plan }),
+    });
+    const payload = await res.json();
+    if (!res.ok || !payload.url) {
+      el.glanureMaxActionStatus.textContent = payload.error || "Erreur lors de la préparation du paiement.";
+      el.glanureMaxSubscribeBtn.disabled = false;
+      return;
+    }
+    location.href = payload.url;
+  } catch (_e) {
+    el.glanureMaxActionStatus.textContent = "Impossible de contacter le serveur de paiement.";
+    el.glanureMaxSubscribeBtn.disabled = false;
+  }
+});
+
+el.glanureMaxManageBtn.addEventListener("click", async () => {
+  const { data: { session } } = await sb.auth.getSession();
+  if (!session) return;
+  el.glanureMaxManageBtn.disabled = true;
+  el.glanureMaxActionStatus.hidden = false;
+  el.glanureMaxActionStatus.textContent = "Ouverture de l'espace de gestion...";
+  try {
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/stripe-portal`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${session.access_token}` },
+    });
+    const payload = await res.json();
+    if (!res.ok || !payload.url) {
+      el.glanureMaxActionStatus.textContent = payload.error || "Erreur lors de l'ouverture de l'espace de gestion.";
+      el.glanureMaxManageBtn.disabled = false;
+      return;
+    }
+    location.href = payload.url;
+  } catch (_e) {
+    el.glanureMaxActionStatus.textContent = "Impossible de contacter le serveur.";
+    el.glanureMaxManageBtn.disabled = false;
+  }
+});
+
+// Retour depuis Stripe Checkout (succès ou annulation) : ouvre "Mon compte" avec un message,
+// puis nettoie l'URL pour ne pas re-déclencher le message au prochain rechargement de la page.
+function handleGlanureMaxCheckoutRedirect() {
+  const params = new URLSearchParams(location.search);
+  const checkout = params.get("checkout");
+  if (!checkout) return;
+  history.replaceState(null, "", location.pathname);
+  if (!currentUser) return;
+  openAccountView().then(() => {
+    el.glanureMaxActionStatus.hidden = false;
+    el.glanureMaxActionStatus.textContent =
+      checkout === "success"
+        ? "Merci ! Ton abonnement Glanure Max est en cours d'activation (ça peut prendre quelques secondes, recharge la page si besoin)."
+        : "Paiement annulé — rien n'a été débité.";
+  });
+}
 
 // ---- suppression du compte : export préalable optionnel, puis appel à la edge function
 // "delete-account" (seule capable de supprimer le compte auth.users lui-même, la clé anonyme
