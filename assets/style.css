@@ -194,6 +194,21 @@ header h1 { font-size: 1.4rem; margin: 0; letter-spacing: 0.01em; }
 }
 .auth-menu-dropdown button:hover { background: var(--accent-soft) !important; }
 
+/* ---------- bandeau "ajouts en attente de synchronisation" (mode hors-ligne enrichi, Phase 20) ---------- */
+.offline-sync-badge {
+  display: block;
+  width: 100%;
+  border: none;
+  border-radius: 0;
+  background: var(--status-wanted-bg);
+  color: var(--status-wanted-text);
+  font-weight: 700;
+  font-size: 0.85rem;
+  padding: 0.55rem 1rem;
+  text-align: center;
+  cursor: pointer;
+}
+
 nav.main-nav {
   display: flex;
   gap: 0.6rem;
@@ -3080,6 +3095,25 @@ body.game-fullscreen-lock { overflow: hidden; }
   #labels-view, #labels-view * { visibility: visible; }
   #labels-view { position: absolute; top: 0; left: 0; width: 100%; padding: 0; margin: 0; }
   .label-actions { display: none !important; }
+}
+
+/* ---------- mode tablette / paysage (Phase 20) ----------
+   Le reste de la mise en page est déjà responsive par nature (grilles en `auto-fill`, conteneur
+   centré `max-width`), donc peu de choses manquaient réellement pour les écrans larges (tablette
+   Android en paysage dans l'app mobile, mais aussi desktop/tablette web) : surtout la barre de
+   navigation, forcée en défilement horizontal pour tenir sur un téléphone étroit, ce qui n'a plus
+   lieu d'être dès qu'il y a la place d'afficher les 6 boutons sur une seule ligne sans découpe. */
+@media (min-width: 820px) {
+  nav.main-nav {
+    overflow-x: visible;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  /* Un peu plus de place pour les grilles (catalogue, vitrine, échanges...) sur les très grands
+     écrans (tablette 12" en paysage, desktop large) — la grille `auto-fill` ci-dessus se charge
+     ensuite toute seule d'ajouter les colonnes supplémentaires, rien d'autre à changer. */
+  main { max-width: 1280px; }
 }
 
 [hidden] { display: none !important; }

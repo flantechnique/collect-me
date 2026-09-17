@@ -58,6 +58,7 @@ let currentStatsEntries = []; // dernier jeu d'entrées chargé par loadStats(),
 // ---------- elements ----------
 const el = {
   themeToggleBtn: document.getElementById("theme-toggle-btn"),
+  offlineSyncBadge: document.getElementById("offline-sync-badge"),
   authArea: document.getElementById("auth-area"),
   viewHomeBtn: document.getElementById("view-home"),
   viewCollectionBtn: document.getElementById("view-collection"),
@@ -586,6 +587,8 @@ async function initAuth() {
   setupNativeAuthCallback();
   setupNativeShortcuts();
   maybeShowOnboardingForNewUser();
+  renderOfflineSyncBadge();
+  flushPendingAdds();
 
   sb.auth.onAuthStateChange((event, session) => {
     currentUser = session?.user ?? null;
@@ -597,6 +600,8 @@ async function initAuth() {
     if (currentUser) loadMyCollection();
     setupNativePush();
     if (event === "SIGNED_IN") maybeShowOnboardingForNewUser();
+    renderOfflineSyncBadge();
+    flushPendingAdds();
   });
 }
 
@@ -772,7 +777,28 @@ function setupNativeShortcuts() {
       switchView("home");
       setTimeout(() => el.globalSearchInput?.focus(), 300);
     } else if (target === "minigames") switchView("minigames");
+    else if (target === "scan") openQuickScanShortcut();
   });
+}
+
+// ---- raccourci "Scan rapide" (Phase 20) : va directement à la caméra sans repasser par
+// l'accueil puis le choix de catégorie. Le scan de code-barres n'a de sens que pour les
+// catégories qui ont une source de recherche par code-barres (voir BARCODE_LOOKUP : vinyles,
+// CD, livres) — on rouvre donc la dernière catégorie scannée avec succès (mémorisée en
+// localStorage), ou "vinyl" par défaut à la toute première utilisation. ----
+function openQuickScanShortcut() {
+  let lastSlug = null;
+  try {
+    lastSlug = localStorage.getItem("glanure-last-scan-category");
+  } catch (_e) {
+    // stockage indisponible : on retombe simplement sur le défaut ci-dessous
+  }
+  const slug = (lastSlug && BARCODE_LOOKUP[lastSlug] && categories.some((c) => c.slug === lastSlug))
+    ? lastSlug
+    : "vinyl";
+  switchView("catalogue");
+  selectCategory(slug);
+  setTimeout(() => openBarcodeScanner(), 300);
 }
 
 // Un seul point d'entrée dans l'en-tête ("Se connecter" déconnecté, "Profil ▾" connecté) au
@@ -2010,12 +2036,97 @@ el.addItemForm.addEventListener("submit", async (e) => {
 });
 
 // ---------- collection ----------
+// ---------- mode hors-ligne enrichi : file d'attente pour l'ajout à la collection (Phase 20) ----------
+// Cas d'usage visé : ajouter un exemplaire trouvé "sur le terrain" (vide-grenier, salon,
+// boutique) sans réseau. Volontairement limité à l'AJOUT (l'action la plus fréquente hors-ligne
+// et la plus sûre à rejouer plus tard, puisqu'elle ne touche jamais une donnée déjà existante) —
+// modifier ou supprimer un exemplaire hors-ligne n'est pas mis en file, pour ne pas risquer un
+// conflit avec un changement fait entre-temps depuis un autre appareil.
+function pendingAddsKey(userId) {
+  return `glanure-pending-adds:${userId}`;
+}
+function readPendingAdds(userId) {
+  try {
+    return JSON.parse(localStorage.getItem(pendingAddsKey(userId)) || "[]");
+  } catch (_e) {
+    return [];
+  }
+}
+function writePendingAdds(userId, list) {
+  try {
+    localStorage.setItem(pendingAddsKey(userId), JSON.stringify(list));
+  } catch (_e) {
+    // quota dépassé ou navigation privée : l'ajout reste tenté en direct, tant pis pour la
+    // mise en file si le stockage est indisponible
+  }
+}
+
+function renderOfflineSyncBadge() {
+  if (!el.offlineSyncBadge) return;
+  if (!currentUser) {
+    el.offlineSyncBadge.hidden = true;
+    return;
+  }
+  const count = readPendingAdds(currentUser.id).length;
+  el.offlineSyncBadge.hidden = count === 0;
+  el.offlineSyncBadge.textContent = `🕓 ${count} ajout${count > 1 ? "s" : ""} en attente de synchronisation (appuie pour réessayer)`;
+}
+
+function queueOfflineAdd(itemId, status) {
+  const list = readPendingAdds(currentUser.id);
+  list.push({ itemId, status, queuedAt: new Date().toISOString() });
+  writePendingAdds(currentUser.id, list);
+  renderOfflineSyncBadge();
+  alert(
+    "Pas de réseau : cet ajout est enregistré sur cet appareil et sera synchronisé automatiquement dès que la connexion reviendra."
+  );
+}
+
+let flushingOfflineQueue = false;
+async function flushPendingAdds() {
+  if (!currentUser || flushingOfflineQueue || !navigator.onLine) return;
+  const list = readPendingAdds(currentUser.id);
+  if (!list.length) return;
+  flushingOfflineQueue = true;
+  const remaining = [];
+  for (const entry of list) {
+    try {
+      const { error } = await sb
+        .from("collection_entries")
+        .insert({ item_id: entry.itemId, status: entry.status, user_id: currentUser.id });
+      if (error) remaining.push(entry); // on retentera plus tard (ex. réseau retombé entre-temps)
+    } catch (_e) {
+      remaining.push(entry); // échec réseau : on garde l'ajout en file pour la prochaine tentative
+    }
+  }
+  writePendingAdds(currentUser.id, remaining);
+  flushingOfflineQueue = false;
+  renderOfflineSyncBadge();
+  if (remaining.length < list.length) loadMyCollection(); // au moins un ajout a bien été synchronisé
+}
+window.addEventListener("online", flushPendingAdds);
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") flushPendingAdds();
+});
+el.offlineSyncBadge?.addEventListener("click", flushPendingAdds);
+
 async function addToCollection(itemId, status) {
-  const { error } = await sb.from("collection_entries").insert({
-    item_id: itemId,
-    status,
-    user_id: currentUser.id,
-  });
+  if (!navigator.onLine) {
+    queueOfflineAdd(itemId, status);
+    return;
+  }
+  let error;
+  try {
+    ({ error } = await sb.from("collection_entries").insert({
+      item_id: itemId,
+      status,
+      user_id: currentUser.id,
+    }));
+  } catch (_e) {
+    // le réseau a pu tomber entre la vérification ci-dessus et l'appel lui-même
+    queueOfflineAdd(itemId, status);
+    return;
+  }
   if (error) return alert(error.message);
   loadMyCollection();
 };
@@ -3640,6 +3751,11 @@ async function openBarcodeScanner() {
       if (result) {
         const code = result.getText();
         closeBarcodeScanner();
+        try {
+          localStorage.setItem("glanure-last-scan-category", cat.slug);
+        } catch (_e) {
+          // best-effort seulement (utilisé par le raccourci "Scan rapide", Phase 20)
+        }
         searchByBarcode(code, cat, lookup);
       }
       // les erreurs de "pas encore de code détecté" sont normales à chaque frame, on les ignore
