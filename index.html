@@ -29,6 +29,7 @@
   <header>
     <h1 id="brand-logo" role="button" tabindex="0"><img src="assets/logo-mark.png" alt="" class="brand-logo-icon" />Glanure</h1>
     <div class="header-right">
+      <button id="onboarding-help-btn" type="button" class="theme-toggle-btn" aria-label="Guide de démarrage" title="Guide de démarrage">❓</button>
       <button id="theme-toggle-btn" type="button" class="theme-toggle-btn" aria-label="Changer de thème" title="Changer de thème">🌓</button>
       <div id="notifications-area" class="notifications-area" hidden>
         <button id="notifications-bell-btn" type="button" class="notifications-bell" aria-label="Notifications">
@@ -518,6 +519,13 @@
         </form>
       </div>
 
+      <div class="stats-section">
+        <h3>📦 Exporter mes données (RGPD)</h3>
+        <p class="empty">Télécharge une archive JSON complète de tes données personnelles : profil, collection (avec dates d'acquisition), artistes suivis, comptes suivis/abonnés, listes possédées ou rejointes, historique des mini-jeux, réactions/commentaires laissés ailleurs et réservations de cadeaux faites chez d'autres.</p>
+        <button id="account-export-rgpd-btn" type="button">⬇️ Exporter toutes mes données</button>
+        <p id="account-export-rgpd-status" class="empty" hidden></p>
+      </div>
+
       <div class="stats-section account-danger-zone">
         <h3>🗑️ Supprimer mon compte</h3>
         <p class="empty">Cette action supprime définitivement ton compte, ta collection, ton profil et tes photos. Impossible à annuler.</p>
@@ -729,6 +737,36 @@
         <p id="new-category-error" class="auth-modal-error" hidden></p>
         <button type="submit" id="new-category-submit">Créer la collection</button>
       </form>
+    </div>
+  </div>
+
+  <div id="onboarding-modal" class="auth-modal" hidden>
+    <div class="auth-modal-box onboarding-box">
+      <button id="onboarding-close" type="button" class="barcode-scanner-close" aria-label="Fermer">×</button>
+      <div id="onboarding-steps">
+        <div class="onboarding-step" data-step="0">
+          <h3>👋 Bienvenue sur Glanure !</h3>
+          <p>Glanure t'aide à cataloguer et suivre tes collections : vinyles, DVD et steelbooks, jeux vidéo, CD, timbres, monnaies, livres, affiches de films...</p>
+        </div>
+        <div class="onboarding-step" data-step="1" hidden>
+          <h3>🗂️ Ajoute tes objets</h3>
+          <p>Depuis l'accueil, choisis une catégorie (ou crée la tienne) et ajoute chaque exemplaire : état, prix, date d'acquisition, notes...</p>
+        </div>
+        <div class="onboarding-step" data-step="2" hidden>
+          <h3>🪪 Partage ta vitrine</h3>
+          <p>Dans "Mon compte", active ton profil public pour partager ta collection avec un lien, et suis d'autres collectionneurs.</p>
+        </div>
+        <div class="onboarding-step" data-step="3" hidden>
+          <h3>🔎 Découvre</h3>
+          <p>L'onglet "Découvrir" propose recherche avancée, échanges entre collectionneurs, mini-jeux et nouveautés de tes créateurs suivis. Ce guide reste accessible via le ❓ en haut de l'écran.</p>
+        </div>
+      </div>
+      <div id="onboarding-dots" class="onboarding-dots"></div>
+      <div class="onboarding-nav">
+        <button id="onboarding-prev-btn" type="button" class="link-btn" hidden>← Précédent</button>
+        <button id="onboarding-skip-btn" type="button" class="link-btn">Passer</button>
+        <button id="onboarding-next-btn" type="button">Suivant →</button>
+      </div>
     </div>
   </div>
 
